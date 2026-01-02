@@ -1,0 +1,31 @@
+services:
+  portainer:
+    image: portainer/portainer-ce:latest
+    container_name: portainer
+    hostname: portainer
+    restart: always
+    env_file: .env
+    environment:
+      TZ: ${TZ}
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    ports:
+      - "${PORTAINER_WEB_PORT}:9000"
+      - "${PORTAINER_EDGE_PORT}:8000"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - portainer_data:/data
+    networks:
+      - portainer_network
+
+networks:
+  portainer_network:
+    driver: bridge
+    name: portainer_network
+
+volumes:
+  portainer_data:
+    name: portainer_data

@@ -1,0 +1,33 @@
+---
+- name: Update local Pi-hole pihole.toml
+  ansible.builtin.lineinfile:
+    path: "{{ playbook_dir }}/../containers/pihole/pihole.toml"
+    regexp: '^revServers\s*='
+    line: 'revServers = ["true,{{ pihole_network }},{{ pihole_gateway }},{{ pihole_domain }}"]'
+    state: present
+  delegate_to: localhost
+  when:
+    - containers_upload_files
+    - "'pihole' in containers_installs"
+
+- name: Set webserver threads based on CPU cores (cores * 2)
+  ansible.builtin.lineinfile:
+    path: "{{ playbook_dir }}/../containers/pihole/pihole.toml"
+    regexp: '^#?\s*threads\s*='
+    line: 'threads = {{ ansible_processor_vcpus * 2 }}'
+    state: present
+  delegate_to: localhost
+  when:
+    - containers_upload_files
+    - "'pihole' in containers_installs"
+
+- name: Create cron job for weekly Pi-hole updates (every Monday at Midnight)
+  ansible.builtin.cron:
+    name: "Update Pi-hole container and gravity"
+    minute: "0"
+    hour: "0"
+    weekday: "1"
+    user: "{{ new_users[0].name }}"
+    job: "cd {{ containers_remote_directory }}/pihole && ./update_pihole.sh >> /var/log/pihole-update.log 2>&1"
+    state: present
+  when: "'pihole' in containers_installs"

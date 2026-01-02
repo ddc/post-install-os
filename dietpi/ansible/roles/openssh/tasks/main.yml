@@ -1,0 +1,85 @@
+---
+- name: Check if dropbear is installed
+  become: yes
+  ansible.builtin.command: dpkg -l dropbear
+  register: dropbear_check
+  failed_when: false
+  changed_when: false
+
+- name: Check if openssh-server is installed
+  become: yes
+  ansible.builtin.command: dpkg -l openssh-server
+  register: openssh_check
+  failed_when: false
+  changed_when: false
+
+- name: Display SSH server status
+  become: yes
+  ansible.builtin.debug:
+    msg: "{{ 'Dropbear detected - skipping OpenSSH configuration' if dropbear_check.rc == 0 else 'OpenSSH detected - proceeding with configuration' }}"
+
+- name: OpenSSH Configuration Block
+  become: yes
+  block:
+    - name: Install OpenSSH server
+      ansible.builtin.apt:
+        name: openssh-server
+        state: present
+        update_cache: yes
+
+    - name: Ensure SSH service is enabled and started
+      ansible.builtin.systemd:
+        name: ssh
+        enabled: yes
+        state: started
+
+    - name: Check if sshd_config backup exists
+      ansible.builtin.stat:
+        path: /etc/ssh/sshd_config.backup
+      register: sshd_backup_check
+
+    - name: Backup original sshd_config
+      ansible.builtin.copy:
+        src: /etc/ssh/sshd_config
+        dest: /etc/ssh/sshd_config.backup
+        remote_src: yes
+        force: no
+      when: not sshd_backup_check.stat.exists
+
+    - name: Configure SSH security settings
+      ansible.builtin.lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: "^{{ item.regexp }}"
+        line: "{{ item.line }}"
+        state: present
+      loop:
+        - { regexp: '^#?Port', line: 'Port {{ ssh_port }}' }
+        - { regexp: '^#?PermitRootLogin', line: 'PermitRootLogin {{ "no" if ssh_root_login == false else "yes" }}' }
+        - { regexp: '^#?PasswordAuthentication', line: 'PasswordAuthentication {{ "no" if ssh_password_auth == false else "yes" }}' }
+        - { regexp: '^#?PubkeyAuthentication', line: 'PubkeyAuthentication {{ "yes" if ssh_pubkey_auth == true else "no" }}' }
+        - { regexp: '^#?ClientAliveInterval', line: 'ClientAliveInterval {{ ssh_client_alive_interval }}' }
+        - { regexp: '^#?ClientAliveCountMax', line: 'ClientAliveCountMax 0' }
+        - { regexp: '^#?TCPKeepAlive', line: 'TCPKeepAlive no' }
+        - { regexp: '^#?UseDNS', line: 'UseDNS no' }
+        - { regexp: '^#?GSSAPIAuthentication', line: 'GSSAPIAuthentication no' }
+
+    - name: Add strong SSH encryption settings
+      ansible.builtin.blockinfile:
+        path: /etc/ssh/sshd_config
+        block: |
+          # Strong encryption settings (added by Ansible)
+          Protocol 2
+          Ciphers {{ ssh_ciphers | join(',') }}
+          MACs {{ ssh_macs | join(',') }}
+          KexAlgorithms {{ ssh_kex_algorithms | join(',') }}
+        marker: "# {mark} ANSIBLE MANAGED BLOCK - SSH Encryption"
+
+    - name: Restart SSH service
+      ansible.builtin.systemd:
+        name: ssh
+        state: restarted
+        daemon_reload: yes
+      notify:
+        - Wait for SSH to restart
+
+  when: dropbear_check.rc != 0

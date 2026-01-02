@@ -1,0 +1,6 @@
+---
+- name: Wait for SSH to restart
+  ansible.builtin.wait_for:
+    port: "{{ ssh_port }}"
+    delay: 5
+    timeout: 60

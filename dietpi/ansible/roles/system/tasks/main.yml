@@ -1,0 +1,121 @@
+---
+- name: Update package cache
+  become: yes
+  ansible.builtin.apt:
+    update_cache: yes
+    cache_valid_time: 3600
+
+- name: Upgrade all packages
+  become: yes
+  ansible.builtin.apt:
+    upgrade: dist
+    autoremove: yes
+
+- name: Check if DietPi update script exists
+  become: yes
+  ansible.builtin.stat:
+    path: /boot/dietpi/dietpi-update
+  register: dietpi_update_script
+
+- name: Update DietPi
+  become: yes
+  ansible.builtin.command: /boot/dietpi/dietpi-update 1
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+    G_INTERACTIVE: 0
+  register: dietpi_update_result
+  when: dietpi_update_script.stat.exists
+  changed_when: "dietpi_update_result.rc == 0"
+
+- name: Display DietPi update result
+  become: yes
+  ansible.builtin.debug:
+    msg: "{{ dietpi_update_result.stdout_lines }}"
+  when:
+    - dietpi_update_script.stat.exists
+    - dietpi_update_result is defined
+
+- name: Install initial packages
+  become: yes
+  ansible.builtin.apt:
+    name: "{{ install_packages }}"
+    state: present
+
+- name: Remove unused packages after installation
+  become: yes
+  ansible.builtin.apt:
+    autoremove: yes
+
+- name: Check if swap file exists
+  become: yes
+  ansible.builtin.stat:
+    path: /swapfile
+  register: swap_file
+
+- name: Create 4GB swap file
+  become: yes
+  ansible.builtin.command: fallocate -l 4G /swapfile
+  when: not swap_file.stat.exists
+  changed_when: true
+
+- name: Set swap file permissions
+  become: yes
+  ansible.builtin.file:
+    path: /swapfile
+    mode: '0600'
+  when: not swap_file.stat.exists
+
+- name: Format swap file
+  become: yes
+  ansible.builtin.command: mkswap /swapfile
+  when: not swap_file.stat.exists
+  changed_when: true
+
+- name: Enable swap file
+  become: yes
+  ansible.builtin.command: swapon /swapfile
+  when: not swap_file.stat.exists
+  changed_when: true
+
+- name: Add swap to fstab
+  become: yes
+  ansible.builtin.lineinfile:
+    path: /etc/fstab
+    line: '/swapfile none swap sw 0 0'
+    state: present
+    create: yes
+  when: not swap_file.stat.exists
+
+- name: Set swappiness to 10 (prefer RAM over swap)
+  become: yes
+  ansible.posix.sysctl:
+    name: vm.swappiness
+    value: '10'
+    state: present
+    sysctl_set: yes
+    reload: yes
+
+- name: Set hostname in /etc/hostname
+  become: yes
+  ansible.builtin.copy:
+    content: "{{ hostname }}\n"
+    dest: /etc/hostname
+    mode: '0644'
+
+- name: Set hostname immediately
+  become: yes
+  ansible.builtin.command: hostname {{ hostname }}
+  changed_when: true
+
+#- name: Check if poetry is installed
+#  ansible.builtin.command: which poetry
+#  register: poetry_check
+#  failed_when: false
+#  changed_when: "false"
+#
+#- name: Configure Poetry virtualenvs for each user
+#  ansible.builtin.command: poetry config virtualenvs.in-project true
+#  become_user: "{{ item.name }}"
+#  loop: "{{ new_users }}"
+#  when: poetry_check.rc == 0
+#  changed_when: "false"

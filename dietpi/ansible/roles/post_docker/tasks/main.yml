@@ -1,0 +1,7 @@
+---
+# Post-deployment tasks for containers
+# This role runs AFTER the docker role deploys containers
+
+- name: Include Pi-hole post-deployment tasks
+  ansible.builtin.include_tasks: pihole.yml
+  when: "'pihole' in containers_installs"

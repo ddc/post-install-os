@@ -1,0 +1,145 @@
+---
+- name: Check if new users exist
+  become: yes
+  ansible.builtin.command: id -u {{ item.name }}
+  register: users_check
+  changed_when: false
+  failed_when: false
+  loop: "{{ new_users }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Create new users if they don't exist
+  become: yes
+  ansible.builtin.user:
+    name: "{{ item.item.name }}"
+    comment: "local user"
+    shell: "{{ item.item.shell }}"
+    groups: sudo
+    append: yes
+    create_home: yes
+    password: "{{ item.item.password | password_hash('sha512') }}"
+    password_lock: no
+  loop: "{{ users_check.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+  when: item.rc != 0
+
+- name: Ensure users have sudo access
+  become: yes
+  ansible.builtin.lineinfile:
+    path: /etc/sudoers
+    regexp: '^{{ item.name }}\s+ALL='
+    line: "{{ item.name }} ALL=(ALL) NOPASSWD:ALL"
+    validate: 'visudo -cf %s'
+  loop: "{{ new_users }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Create home tmp directory for new users
+  become: yes
+  ansible.builtin.file:
+    path: "/home/{{ item.name }}/tmp"
+    state: directory
+    owner: "{{ item.name }}"
+    group: "{{ item.name }}"
+    mode: '0755'
+  loop: "{{ new_users }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Create home .ssh directory for new users
+  become: yes
+  ansible.builtin.file:
+    path: "/home/{{ item.name }}/.ssh"
+    state: directory
+    owner: "{{ item.name }}"
+    group: "{{ item.name }}"
+    mode: '0700'
+  loop: "{{ new_users }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Find all common directories and files
+  become: yes
+  ansible.builtin.find:
+    paths: "{{ playbook_dir }}/../home/"
+    recurse: yes
+    file_type: file
+    hidden: yes
+  delegate_to: localhost
+  register: common_scripts_files
+
+- name: Create necessary home directories all users
+  become: yes
+  ansible.builtin.file:
+    path: "/home/{{ item.0.name }}/{{ item.1.path | regex_replace('.*/home/', '') | dirname }}"
+    state: directory
+    owner: "{{ item.0.name }}"
+    group: "{{ item.0.name }}"
+    mode: '0755'
+  loop: "{{ new_users | product(common_scripts_files.files) | list }}"
+  loop_control:
+    label: "Creating directory for {{ item.0.name }}/{{ item.1.path | basename }}"
+  when: item.1.path | regex_replace('.*/home/', '') | dirname | length > 0
+
+- name: Copy each file to all users home directories
+  become: yes
+  ansible.builtin.copy:
+    src: "{{ item.1.path }}"
+    dest: "/home/{{ item.0.name }}/{{ item.1.path | regex_replace('.*/home/', '') }}"
+    owner: "{{ item.0.name }}"
+    group: "{{ item.0.name }}"
+    mode: "{{ '0755' if item.1.path.endswith('.sh') else '0644' }}"
+  loop: "{{ new_users | product(common_scripts_files.files) | list }}"
+  loop_control:
+    label: "Copying {{ item.1.path | basename }} to {{ item.0.name }}"
+
+- name: Copy SSH public key to each user
+  become: yes
+  ansible.builtin.copy:
+    src: "{{ item.pub_key_location }}"
+    dest: "/home/{{ item.name }}/.ssh/authorized_keys"
+    owner: "{{ item.name }}"
+    group: "{{ item.name }}"
+    mode: '0600'
+  loop: "{{ new_users }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Set ownership for ~/.cache directory
+  become: yes
+  ansible.builtin.file:
+    path: "/home/{{ item.name }}/.cache"
+    owner: "{{ item.name }}"
+    group: "{{ item.name }}"
+    recurse: yes
+  loop: "{{ new_users }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+##### ROOT #####
+- name: Create necessary directories in root home
+  become: yes
+  ansible.builtin.file:
+    path: "/root/{{ item.path | regex_replace('.*/home/', '') | dirname }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  loop: "{{ common_scripts_files.files }}"
+  loop_control:
+    label: "Creating directory for {{ item.path | basename }}"
+  when: item.path | regex_replace('.*/home/', '') | dirname | length > 0
+
+- name: Copy files to root home directory
+  become: yes
+  ansible.builtin.copy:
+    src: "{{ item.path }}"
+    dest: "/root/{{ item.path | regex_replace('.*/home/', '') }}"
+    owner: root
+    group: root
+    mode: "{{ '0755' if item.path.endswith('.sh') else '0644' }}"
+  loop: "{{ common_scripts_files.files }}"
+  loop_control:
+    label: "Copying {{ item.path | basename }} to root"

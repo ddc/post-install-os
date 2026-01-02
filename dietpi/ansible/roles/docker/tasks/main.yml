@@ -1,0 +1,190 @@
+---
+- name: Check if Docker is already installed
+  ansible.builtin.command: which docker
+  register: docker_check
+  changed_when: false
+  failed_when: false
+
+- name: Install Docker using official script
+  ansible.builtin.shell: |
+    curl -fsSL https://get.docker.com -o get-docker.sh
+    sh get-docker.sh
+    rm get-docker.sh
+  args:
+    creates: /usr/bin/docker
+  become: yes
+  when: docker_check.rc != 0
+
+- name: Add all users to docker group
+  ansible.builtin.user:
+    name: "{{ item.name }}"
+    groups: docker
+    append: yes
+  become: yes
+  loop: "{{ new_users }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Unmask Docker service
+  ansible.builtin.systemd:
+    name: docker
+    masked: no
+  become: yes
+
+- name: Enable and start Docker service
+  ansible.builtin.systemd:
+    name: docker
+    enabled: yes
+    state: started
+    daemon_reload: yes
+  become: yes
+
+- name: Verify Docker installation
+  ansible.builtin.command: docker --version
+  register: docker_version
+  changed_when: false
+
+- name: Display Docker version
+  ansible.builtin.debug:
+    msg: "Docker installed: {{ docker_version.stdout }}"
+
+- name: Get latest docker-compose version from GitHub
+  ansible.builtin.uri:
+    url: https://api.github.com/repos/docker/compose/releases/latest
+    return_content: yes
+  register: compose_latest
+  changed_when: false
+
+- name: Get current docker-compose version
+  ansible.builtin.shell: |
+    if [ -f {{ ansible_env.HOME }}/bin/docker-compose ]; then
+      {{ ansible_env.HOME }}/bin/docker-compose --version 2>/dev/null | awk '{print $4}' || echo "none"
+    else
+      echo "none"
+    fi
+  register: compose_current
+  changed_when: false
+
+- name: Set docker-compose versions
+  ansible.builtin.set_fact:
+    compose_latest_version: "{{ compose_latest.json.tag_name }}"
+    compose_current_version: "{{ compose_current.stdout }}"
+    compose_arch: "{{ 'docker-compose-linux-x86_64' if ansible_architecture == 'x86_64' else 'docker-compose-linux-aarch64' }}"
+
+- name: Download and install docker-compose
+  ansible.builtin.get_url:
+    url: "https://github.com/docker/compose/releases/download/{{ compose_latest_version }}/{{ compose_arch }}"
+    dest: "{{ ansible_env.HOME }}/bin/docker-compose"
+    mode: '0755'
+  when: compose_current_version != compose_latest_version
+
+- name: Create docker CLI plugins directory
+  ansible.builtin.file:
+    path: /usr/libexec/docker/cli-plugins
+    state: directory
+    mode: '0755'
+  become: yes
+  when: compose_current_version != compose_latest_version
+
+- name: Copy docker-compose to plugin directory
+  ansible.builtin.copy:
+    src: "{{ ansible_env.HOME }}/bin/docker-compose"
+    dest: /usr/libexec/docker/cli-plugins/docker-compose
+    remote_src: yes
+    mode: '0755'
+  become: yes
+  when: compose_current_version != compose_latest_version
+
+- name: Display docker-compose version
+  ansible.builtin.debug:
+    msg: "docker-compose: {{ compose_current_version }} -> {{ compose_latest_version }}"
+  when: compose_current_version != compose_latest_version
+
+##### CONTAINER DEPLOYMENT #####
+- name: Stop and remove containers with volumes (when cleaning)
+  ansible.builtin.shell: |
+    if [ -d "{{ containers_remote_directory }}/{{ item }}" ]; then
+      cd {{ containers_remote_directory }}/{{ item }} && docker compose down -v --remove-orphans
+    fi
+  become_user: "{{ new_users[0].name }}"
+  loop: "{{ containers_installs }}"
+  when:
+    - containers_upload_files
+    - item in containers_clean_on_deploy
+  failed_when: false
+
+- name: Remove all volumes associated with containers (when cleaning)
+  ansible.builtin.shell: |
+    docker volume ls -q | grep -E '^{{ item }}' | xargs -r docker volume rm
+  become_user: "{{ new_users[0].name }}"
+  loop: "{{ containers_installs }}"
+  when:
+    - containers_upload_files
+    - item in containers_clean_on_deploy
+  failed_when: false
+
+- name: Remove all networks associated with containers (when cleaning)
+  ansible.builtin.shell: |
+    docker network ls -q --filter name={{ item }} | xargs -r docker network rm
+  become_user: "{{ new_users[0].name }}"
+  loop: "{{ containers_installs }}"
+  when:
+    - containers_upload_files
+    - item in containers_clean_on_deploy
+  failed_when: false
+
+- name: Remove container directories (when cleaning)
+  ansible.builtin.file:
+    path: "{{ containers_remote_directory }}/{{ item }}"
+    state: absent
+  become: yes
+  loop: "{{ containers_installs }}"
+  when:
+    - containers_upload_files
+    - item in containers_clean_on_deploy
+
+- name: Create containers directory
+  ansible.builtin.file:
+    path: "{{ containers_remote_directory }}"
+    state: directory
+    owner: "{{ new_users[0].name }}"
+    group: "{{ new_users[0].name }}"
+    mode: '0755'
+  become: yes
+  when: containers_upload_files
+
+- name: Copy container directories
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../containers/{{ item }}/"
+    dest: "{{ containers_remote_directory }}/{{ item }}/"
+    owner: "{{ new_users[0].name }}"
+    group: "{{ new_users[0].name }}"
+    mode: '0755'
+  become: yes
+  loop: "{{ containers_installs }}"
+  when: containers_upload_files
+
+- name: Pull latest container images (before stopping)
+  ansible.builtin.shell: docker compose pull
+  args:
+    chdir: "{{ containers_remote_directory }}/{{ item }}"
+  become_user: "{{ new_users[0].name }}"
+  loop: "{{ containers_installs }}"
+  when: containers_upload_files
+
+- name: Stop and remove existing containers
+  ansible.builtin.shell: docker compose down
+  args:
+    chdir: "{{ containers_remote_directory }}/{{ item }}"
+  become_user: "{{ new_users[0].name }}"
+  loop: "{{ containers_installs }}"
+  when: containers_upload_files
+  failed_when: false
+
+- name: Start Docker containers with updated images
+  ansible.builtin.shell: docker compose up -d
+  args:
+    chdir: "{{ containers_remote_directory }}/{{ item }}"
+  become_user: "{{ new_users[0].name }}"
+  loop: "{{ containers_installs }}"
+  when: containers_upload_files

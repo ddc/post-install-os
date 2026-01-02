@@ -1,0 +1,12 @@
+all:
+  children:
+    raspberrypi:
+      hosts:
+        dietpi:
+          ansible_host: "{{ dietpi_host }}"
+          ansible_python_interpreter: /usr/bin/python3
+          #ansible_user: "dietpi"
+
+          # Uncomment after SSH keys are configured with the new user and comment ansible_user above
+          ansible_user: "{{ new_users[0].name }}"
+          ansible_ssh_private_key_file: "{{ new_users[0].pub_key_location | regex_replace('\\.pub$', '') }}"

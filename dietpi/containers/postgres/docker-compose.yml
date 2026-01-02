@@ -1,0 +1,48 @@
+services:
+  postgres:
+    image: postgres:latest
+    container_name: postgres
+    hostname: postgres
+    restart: always
+    env_file: .env
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    environment:
+      TZ: ${TZ}
+      POSTGRES_USER: ${POSTGRESQL_USER}
+      PGUSER: ${POSTGRESQL_USER}
+      POSTGRES_PASSWORD: ${POSTGRESQL_PASSWORD}
+      POSTGRES_DB: ${POSTGRESQL_DATABASE}
+      PGDATABASE: ${POSTGRESQL_DATABASE}
+      POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256 --auth-local=scram-sha-256"
+    ports:
+      - "${POSTGRESQL_PORT}:5432"
+    volumes:
+      - postgresql_data:/var/lib/postgresql
+    networks:
+      - postgres_network
+    command: >
+      bash -c "
+        docker-entrypoint.sh postgres &
+        until pg_isready -U ${POSTGRESQL_USER} -h localhost; do sleep 1; done;
+        PGPASSWORD=${POSTGRESQL_PASSWORD} psql -U ${POSTGRESQL_USER} -d postgres -tc \"SELECT 1 FROM pg_database WHERE datname = '${POSTGRESQL_DATABASE}'\" | grep -q 1 || PGPASSWORD=${POSTGRESQL_PASSWORD} psql -U ${POSTGRESQL_USER} -d postgres -c \"CREATE DATABASE ${POSTGRESQL_DATABASE}\";
+        wait
+      "
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRESQL_USER} -d ${POSTGRESQL_DATABASE}"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+networks:
+  postgres_network:
+    driver: bridge
+    name: postgres_network
+
+volumes:
+  postgresql_data:
+    name: postgresql_data

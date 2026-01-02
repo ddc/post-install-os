@@ -1,0 +1,168 @@
+---
+# Pi-hole post-deployment tasks
+
+- name: Check if resolvconf is installed
+  ansible.builtin.command: which resolvconf
+  register: resolvconf_check
+  changed_when: false
+  failed_when: "false"
+
+- name: Configure DNS with Pi-hole primary + fallback (using resolvconf)
+  ansible.builtin.blockinfile:
+    path: /etc/resolvconf/resolv.conf.d/head
+    block: |
+      # Upstream DNS (host should NOT use localhost to avoid DNS loop)
+      # Quad9 with malware filtering
+      nameserver 2620:fe::11
+      nameserver 9.9.9.11
+      # Quad9 fallback with malware filtering
+      nameserver 2620:fe::fe:11
+      nameserver 149.112.112.11
+      # Cloudflare fallback DNS (IPv6 + IPv4)
+      nameserver 2606:4700:4700::1111
+      nameserver 1.1.1.1
+      nameserver 2606:4700:4700::1001
+      nameserver 1.0.0.1
+    marker: "# {mark} ANSIBLE MANAGED - DNS Configuration"
+    create: yes
+  become: yes
+  when: resolvconf_check.rc == 0
+
+- name: Configure DNS directly in /etc/resolv.conf (fallback method)
+  ansible.builtin.blockinfile:
+    path: /etc/resolv.conf
+    block: |
+      # Upstream DNS (host should NOT use localhost to avoid DNS loop)
+      # Quad9 with malware filtering
+      nameserver 2620:fe::11
+      nameserver 9.9.9.11
+      # Quad9 fallback with malware filtering
+      nameserver 2620:fe::fe:11
+      nameserver 149.112.112.11
+      # Cloudflare fallback DNS (IPv6 + IPv4)
+      nameserver 2606:4700:4700::1111
+      nameserver 1.1.1.1
+      nameserver 2606:4700:4700::1001
+      nameserver 1.0.0.1
+    marker: "# {mark} ANSIBLE MANAGED - DNS Configuration"
+  become: yes
+  when: resolvconf_check.rc != 0
+
+- name: Prevent DHCP from overwriting DNS configuration (IPv4)
+  ansible.builtin.lineinfile:
+    path: /etc/dhcp/dhclient.conf
+    regexp: '^#?supersede domain-name-servers'
+    line: 'supersede domain-name-servers 9.9.9.11, 149.112.112.11, 1.1.1.1, 1.0.0.1;'
+    create: yes
+  become: yes
+  when: ansible_os_family == "Debian"
+
+- name: Prevent DHCP from overwriting DNS configuration (IPv6)
+  ansible.builtin.lineinfile:
+    path: /etc/dhcp/dhclient6.conf
+    regexp: '^#?supersede domain-name-servers'
+    line: 'supersede domain-name-servers 2620:fe::11, 2620:fe::fe:11, 2606:4700:4700::1111, 2606:4700:4700::1001;'
+    create: yes
+  become: yes
+  when: ansible_os_family == "Debian"
+
+- name: Update resolvconf to apply DNS changes
+  ansible.builtin.command: resolvconf -u
+  become: yes
+  changed_when: false
+  when: resolvconf_check.rc == 0
+
+- name: Wait for Pi-hole container to exist
+  ansible.builtin.shell: |
+    for i in {1..30}; do
+      if docker ps -a --format '{{ '{{' }}.Names{{ '}}' }}' | grep -q '^pihole$'; then
+        exit 0
+      fi
+      sleep 1
+    done
+    exit 1
+  args:
+    executable: /bin/bash
+  when: containers_upload_files
+  register: pihole_exists
+  failed_when: "pihole_exists.rc != 0"
+  changed_when: false
+
+- name: Wait for Pi-hole container to be healthy
+  ansible.builtin.shell: |
+    echo "Waiting for Pi-hole healthcheck (up to 90 seconds)..."
+    for i in {1..45}; do
+      STATUS=$(docker inspect pihole --format='{{ '{{' }}.State.Health.Status{{ '}}' }}' 2>/dev/null || echo "unknown")
+      echo "Attempt $i/45: Status = $STATUS"
+      if [ "$STATUS" = "healthy" ]; then
+        echo "Pi-hole is healthy!"
+        exit 0
+      fi
+      sleep 2
+    done
+    echo "Timeout: Pi-hole did not become healthy"
+    exit 1
+  args:
+    executable: /bin/bash
+  when: containers_upload_files
+  register: pihole_health
+  failed_when: "pihole_health.rc != 0"
+  changed_when: false
+
+- name: Install sqlite3 permanently in Pi-hole container
+  ansible.builtin.shell: |
+    if ! docker exec pihole which sqlite3 >/dev/null 2>&1; then
+      docker exec pihole apk add --no-cache sqlite
+      exit 1
+    fi
+  register: sqlite_install
+  changed_when: sqlite_install.rc != 0
+  failed_when: "false"
+  tags:
+    - pihole
+
+- name: Sync blocklists from blocklists.txt
+  ansible.builtin.shell: bash import_blocklists.sh
+  args:
+    chdir: "{{ containers_remote_directory }}/pihole"
+  become_user: "{{ new_users[0].name }}"
+  register: import_result
+  tags:
+    - pihole_blocklists
+    - pihole
+
+- name: Display blocklist sync results
+  ansible.builtin.debug:
+    var: import_result.stdout_lines
+  tags:
+    - pihole_blocklists
+    - pihole
+
+- name: Check Pi-hole database size
+  ansible.builtin.shell: docker exec pihole sqlite3 /etc/pihole/pihole-FTL.db "SELECT COUNT(*) FROM queries;"
+  register: db_size
+  changed_when: false
+  failed_when: "false"
+  tags:
+    - pihole
+    - pihole_cleanup
+
+- name: Prune old queries if database is too large (automatic maintenance)
+  ansible.builtin.shell: |
+    docker exec pihole sqlite3 /etc/pihole/pihole-FTL.db "DELETE FROM queries WHERE timestamp < strftime('%s', 'now', '-30 days');"
+    docker exec pihole sqlite3 /etc/pihole/pihole-FTL.db "VACUUM;"
+  when:
+    - db_size.stdout is defined
+    - db_size.stdout | int > 100000
+  register: prune_result
+  tags:
+    - pihole
+    - pihole_cleanup
+
+- name: Display database cleanup result
+  ansible.builtin.debug:
+    msg: "Database had {{ db_size.stdout }} queries. Pruned queries older than 30 days."
+  when: prune_result is changed
+  tags:
+    - pihole
+    - pihole_cleanup

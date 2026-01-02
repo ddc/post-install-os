@@ -1,0 +1,78 @@
+---
+- name: Configure DietPi Fresh Install
+  hosts: all
+  serial: 0 # 1 ensures hosts run sequentially, 0 in parallel
+  become: yes
+  become_user: root
+  gather_facts: yes
+  any_errors_fatal: true
+  vars_files:
+    - group_vars/all.yml
+
+  roles:
+    # Base system setup
+    - role: network
+      tags: [network, base]
+    - role: system
+      tags: [system, base]
+    - role: users
+      tags: [users, base]
+
+    # Container-specific roles
+    - role: pihole
+      tags: pihole
+
+    # Container infrastructure (pihole tag auto-includes these)
+    - role: docker
+      tags: [docker, pihole]
+    - role: post_docker
+      tags: [post_docker, docker, pihole]
+
+    # Security
+    - role: openssh
+      tags: [openssh, security]
+    - role: firewall
+      tags: [firewall, security]
+
+  tasks:
+    - name: Disable dietpi user
+      ansible.builtin.user:
+        name: dietpi
+        password_lock: yes
+        state: present
+      become: yes
+      when:
+        - remove_dietpi_user
+        - ansible_user != "dietpi"
+      tags: cleanup_dietpi
+
+    - name: Remove dietpi user
+      ansible.builtin.user:
+        name: dietpi
+        state: absent
+        remove: yes
+      become: yes
+      when:
+        - remove_dietpi_user
+        - ansible_user != "dietpi"
+      tags: cleanup_dietpi
+
+    - name: Remove unused packages
+      ansible.builtin.apt:
+        autoremove: yes
+      become: yes
+      tags: cleanup
+
+    - name: Display completion message
+      ansible.builtin.debug:
+        msg: |
+          --> PLAYBOOK COMPLETE! <--
+      tags: final
+
+    - name: Reboot system
+      ansible.builtin.reboot:
+        msg: "Rebooting to apply all changes"
+        reboot_timeout: 300
+      become: yes
+      when: auto_reboot
+      tags: reboot

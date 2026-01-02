@@ -1,0 +1,67 @@
+---
+# System options
+dietpi_host: "rpi"
+auto_reboot: true
+firewall_enable: true
+network_interface: "eth0"
+hostname: "DietPi"
+
+# Users configuration
+remove_dietpi_user: true
+new_users:
+  - name: "ddc"
+    password: "dietpi"
+    shell: "/usr/bin/bash"
+    pub_key_location: "~/.ssh/ddc.pub"
+
+# Initial installation packages
+install_packages:
+  - vim
+  - git
+  - nmap
+  - btop
+  - zstd
+
+# Docker containers
+containers_remote_directory: "/opt/containers"
+containers_upload_files: true
+containers_clean_on_deploy: []  # List of containers to clean (e.g., ['pihole'] or [] for none)
+containers_installs:
+  - portainer
+  - kafka
+  - mariadb
+  - mongodb
+  - netdata
+  - pihole
+  - postgres
+
+# Pi-hole settings
+pihole_network: "192.168.1.0/24"
+pihole_gateway: "192.168.1.1"
+pihole_domain: "local"
+
+# Static IPv6 configuration
+static_ipv6_enable: true
+static_ipv6_host: "100"
+# Using 100 because it's a server device
+# 1-99 - Network infrastructure (routers, switches)
+# 100-199 - Servers
+# 200-299 - IoT devices
+# 300-399 - Workstations
+
+# OpenSSH server settings
+ssh_port: 22
+ssh_root_login: false
+ssh_password_auth: false
+ssh_pubkey_auth: true
+ssh_client_alive_interval: 300
+ssh_ciphers:
+  - chacha20-poly1305@openssh.com
+  - aes256-gcm@openssh.com
+  - aes256-ctr
+ssh_macs:
+  - hmac-sha2-512-etm@openssh.com
+  - hmac-sha2-512
+ssh_kex_algorithms:
+  - curve25519-sha256
+  - curve25519-sha256@libssh.org

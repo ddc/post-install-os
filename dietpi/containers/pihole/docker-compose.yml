@@ -1,0 +1,44 @@
+---
+services:
+  pihole:
+    image: pihole/pihole:latest
+    container_name: pihole
+    hostname: pihole
+    restart: always
+    network_mode: host
+    env_file: .env
+    cap_add:
+      - NET_ADMIN
+    shm_size: "512m"
+    environment:
+      TZ: ${TZ}
+      FTLCONF_webserver_api_password: ${WEBPASSWORD}
+      FTLCONF_webserver_port: ${WEBPORT}
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1g
+        reservations:
+          memory: 512m
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    volumes:
+      - pihole_data:/etc/pihole
+      - dnsmasq_data:/etc/dnsmasq.d
+      - ./pihole.toml:/etc/pihole/pihole.toml
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep pihole-FTL && nc -z 127.0.0.1 53 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 120s
+
+volumes:
+  pihole_data:
+    name: pihole_data
+  dnsmasq_data:
+    name: dnsmasq_data

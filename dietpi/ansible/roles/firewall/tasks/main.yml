@@ -1,0 +1,287 @@
+---
+- name: Install UFW firewall
+  become: yes
+  ansible.builtin.apt:
+    name: ufw
+    state: present
+  when: firewall_enable
+
+- name: Check if UFW is available
+  become: yes
+  ansible.builtin.command: which ufw
+  register: ufw_check
+  ignore_errors: yes
+  changed_when: false
+  when: firewall_enable
+
+##### DEFAULT POLICIES #####
+- name: Set UFW default incoming policy to deny
+  become: yes
+  community.general.ufw:
+    direction: incoming
+    policy: deny
+  when:
+    - firewall_enable
+    - ufw_check.rc == 0
+
+- name: Set UFW default outgoing policy to allow
+  become: yes
+  community.general.ufw:
+    direction: outgoing
+    policy: allow
+  when:
+    - firewall_enable
+    - ufw_check.rc == 0
+
+##### SSH RULES #####
+- name: Allow SSH port through firewall
+  become: yes
+  community.general.ufw:
+    rule: allow
+    port: "{{ ssh_port }}"
+    proto: tcp
+    comment: 'SSH'
+  when:
+    - firewall_enable
+    - ufw_check.rc == 0
+
+##### PI-HOLE RULES #####
+- name: Allow DNS TCP through firewall
+  become: yes
+  community.general.ufw:
+    rule: allow
+    port: '53'
+    proto: tcp
+    comment: 'DNS TCP'
+  when:
+    - firewall_enable
+    - ufw_check.rc == 0
+    - "'pihole' in containers_installs"
+
+- name: Allow DNS UDP through firewall
+  become: yes
+  community.general.ufw:
+    rule: allow
+    port: '53'
+    proto: udp
+    comment: 'DNS UDP'
+  when:
+    - firewall_enable
+    - ufw_check.rc == 0
+    - "'pihole' in containers_installs"
+
+- name: Allow Pi-hole web interface HTTP
+  become: yes
+  community.general.ufw:
+    rule: allow
+    port: '80'
+    proto: tcp
+    comment: 'Pi-hole Web Interface'
+  when:
+    - firewall_enable
+    - ufw_check.rc == 0
+    - "'pihole' in containers_installs"
+
+- name: Allow Pi-hole web interface HTTPS
+  become: yes
+  community.general.ufw:
+    rule: allow
+    port: '443'
+    proto: tcp
+    comment: 'Pi-hole HTTPS'
+  when:
+    - firewall_enable
+    - ufw_check.rc == 0
+    - "'pihole' in containers_installs"
+
+##### DOCKER CONTAINER RULES #####
+- name: Read Kafka .env file for port configuration
+  become: yes
+  ansible.builtin.shell: |
+    grep 'KAFKA_EXTERNAL_PORT=' {{ containers_remote_directory }}/kafka/.env | cut -d '=' -f 2
+  register: kafka_port
+  when:
+    - firewall_enable
+    - containers_upload_files
+    - "'kafka' in containers_installs"
+  changed_when: false
+  failed_when: false
+
+- name: Allow Kafka external port through firewall
+  become: yes
+  community.general.ufw:
+    rule: allow
+    port: "{{ kafka_port.stdout }}"
+    proto: tcp
+    comment: 'Kafka External'
+  when:
+    - firewall_enable
+    - ufw_check.rc == 0
+    - containers_upload_files
+    - "'kafka' in containers_installs"
+    - kafka_port.stdout | length > 0
+
+- name: Read PostgreSQL .env file for port configuration
+  become: yes
+  ansible.builtin.shell: |
+    grep 'POSTGRESQL_PORT=' {{ containers_remote_directory }}/postgres/.env | cut -d '=' -f 2
+  register: postgres_port
+  when:
+    - firewall_enable
+    - containers_upload_files
+    - "'postgres' in containers_installs"
+  changed_when: false
+  failed_when: false
+
+- name: Allow PostgreSQL port through firewall
+  become: yes
+  community.general.ufw:
+    rule: allow
+    port: "{{ postgres_port.stdout }}"
+    proto: tcp
+    comment: 'PostgreSQL'
+  when:
+    - firewall_enable
+    - ufw_check.rc == 0
+    - containers_upload_files
+    - "'postgres' in containers_installs"
+    - postgres_port.stdout | length > 0
+
+- name: Read MySQL .env file for port configuration
+  become: yes
+  ansible.builtin.shell: |
+    grep 'MYSQL_PORT=' {{ containers_remote_directory }}/mysql/.env | cut -d '=' -f 2
+  register: mysql_port
+  when:
+    - firewall_enable
+    - containers_upload_files
+    - "'mysql' in containers_installs"
+  changed_when: false
+  failed_when: false
+
+- name: Allow MySQL port through firewall
+  become: yes
+  community.general.ufw:
+    rule: allow
+    port: "{{ mysql_port.stdout }}"
+    proto: tcp
+    comment: 'MySQL'
+  when:
+    - firewall_enable
+    - ufw_check.rc == 0
+    - containers_upload_files
+    - "'mysql' in containers_installs"
+    - mysql_port.stdout | length > 0
+
+- name: Read MongoDB .env file for port configuration
+  become: yes
+  ansible.builtin.shell: |
+    grep 'MONGODB_PORT=' {{ containers_remote_directory }}/mongodb/.env | cut -d '=' -f 2
+  register: mongodb_port
+  when:
+    - firewall_enable
+    - containers_upload_files
+    - "'mongodb' in containers_installs"
+  changed_when: false
+  failed_when: false
+
+- name: Allow MongoDB port through firewall
+  become: yes
+  community.general.ufw:
+    rule: allow
+    port: "{{ mongodb_port.stdout }}"
+    proto: tcp
+    comment: 'MongoDB'
+  when:
+    - firewall_enable
+    - ufw_check.rc == 0
+    - containers_upload_files
+    - "'mongodb' in containers_installs"
+    - mongodb_port.stdout | length > 0
+
+- name: Read Portainer .env file for web port configuration
+  become: yes
+  ansible.builtin.shell: |
+    grep 'PORTAINER_WEB_PORT=' {{ containers_remote_directory }}/portainer/.env | cut -d '=' -f 2
+  register: portainer_web_port
+  when:
+    - firewall_enable
+    - containers_upload_files
+    - "'portainer' in containers_installs"
+  changed_when: false
+  failed_when: false
+
+- name: Allow Portainer web port through firewall
+  become: yes
+  community.general.ufw:
+    rule: allow
+    port: "{{ portainer_web_port.stdout }}"
+    proto: tcp
+    comment: 'Portainer Web'
+  when:
+    - firewall_enable
+    - ufw_check.rc == 0
+    - containers_upload_files
+    - "'portainer' in containers_installs"
+    - portainer_web_port.stdout | length > 0
+
+- name: Read Portainer .env file for edge port configuration
+  become: yes
+  ansible.builtin.shell: |
+    grep 'PORTAINER_EDGE_PORT=' {{ containers_remote_directory }}/portainer/.env | cut -d '=' -f 2
+  register: portainer_edge_port
+  when:
+    - firewall_enable
+    - containers_upload_files
+    - "'portainer' in containers_installs"
+  changed_when: false
+  failed_when: false
+
+- name: Allow Portainer edge port through firewall
+  become: yes
+  community.general.ufw:
+    rule: allow
+    port: "{{ portainer_edge_port.stdout }}"
+    proto: tcp
+    comment: 'Portainer Edge'
+  when:
+    - firewall_enable
+    - ufw_check.rc == 0
+    - containers_upload_files
+    - "'portainer' in containers_installs"
+    - portainer_edge_port.stdout | length > 0
+
+- name: Read Netdata .env file for port configuration
+  become: yes
+  ansible.builtin.shell: |
+    grep 'NETDATA_PORT=' {{ containers_remote_directory }}/netdata/.env | cut -d '=' -f 2
+  register: netdata_port
+  when:
+    - firewall_enable
+    - containers_upload_files
+    - "'netdata' in containers_installs"
+  changed_when: false
+  failed_when: false
+
+- name: Allow Netdata port through firewall
+  become: yes
+  community.general.ufw:
+    rule: allow
+    port: "{{ netdata_port.stdout }}"
+    proto: tcp
+    comment: 'Netdata Web'
+  when:
+    - firewall_enable
+    - ufw_check.rc == 0
+    - containers_upload_files
+    - "'netdata' in containers_installs"
+    - netdata_port.stdout | length > 0
+
+##### ENABLE FIREWALL #####
+- name: Enable UFW firewall
+  become: yes
+  community.general.ufw:
+    state: enabled
+  when:
+    - firewall_enable
+    - ufw_check.rc == 0
