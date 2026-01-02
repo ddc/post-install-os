@@ -28,6 +28,7 @@ log_action() { echo -e "${ACTION_MARK} ${BLUE}[ACTION]${NC} $*"; }
 #############################################################################
 [[ $EUID -eq 0 ]] && log_error "Script cannot be run by root" && exit 1
 #############################################################################
+mkdir -p "$HOME/Programs" 2>/dev/null || true
 mkdir -p "$HOME/tmp" 2>/dev/null || true
 pushd "$HOME/tmp" || { log_error "Failed to change to tmp directory" 1>&2; exit 1; }
 #############################################################################
@@ -158,12 +159,31 @@ for pkg in ${list_libs//,/ }; do
 done
 #############################################################################
 log_action "INSTALLING Fonts"
-list_fonts="xorg-x11-font-utils, fontconfig, texlive-latex, texlive-latex-fonts,
-google-noto-sans-fonts, google-noto-serif-fonts, liberation-fonts"
+list_fonts="xorg-x11-font-utils, fontconfig, texlive-latex, texlive-latex-fonts"
 for pkg in ${list_fonts//,/ }; do
     log_info "Installing font: $pkg"
     sudo dnf install -y "$pkg"
 done
+#############################################################################
+log_action "INSTALLING Nerd Fonts"
+nerd_font_url="https://github.com/ryanoasis/nerd-fonts/releases/latest/download"
+nerd_fonts_dir="$HOME/.fonts/nerd"
+list_nerd_fonts="JetBrainsMono, FiraCode, Hack, Meslo, SourceCodePro, UbuntuMono,
+RobotoMono, CascadiaCode, Inconsolata, Noto, DejaVuSansMono, IBMPlexMono, LiberationMono,
+Iosevka, IosevkaTerm, VictorMono, Mononoki, AnonymousPro, FantasqueSansMono, SpaceMono,
+Monofur, Terminus, Go-Mono, IntelOneMono"
+mkdir -p "$nerd_fonts_dir" 2>/dev/null || true
+for pkg in ${list_nerd_fonts//,/ }; do
+    log_info "Installing nerd font: $pkg"
+    rm -rf "$nerd_fonts_dir/$pkg"
+    if wget -q "$nerd_font_url/$pkg.zip" -O "$nerd_fonts_dir/$pkg.zip"; then
+        unzip -q "$nerd_fonts_dir/$pkg.zip" -d "$nerd_fonts_dir/$pkg"
+        rm "$nerd_fonts_dir/$pkg.zip"
+    else
+        log_error "Failed to download nerd font: $pkg"
+    fi
+done
+fc-cache -fr
 #############################################################################
 log_action "Installing Flatpak"
 log_info "Cleaning up old flatpak installation"
