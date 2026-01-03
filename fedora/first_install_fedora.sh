@@ -195,7 +195,7 @@ flatpak remote-add --user --if-not-exists flathub https://flathub.org/repo/flath
 refresh_flatpak
 #############################################################################
 log_action "INSTALLING Flatpak apps"
-## disabled: floorp, eu.betterbird.Betterbird
+## disabled: floorp, eu.betterbird.Betterbird, com.termius.Termius
 ## Application Data & Config: ~/.var/app
 ## Flatpak-specific directories: ~/.local/share/flatpak/app
 ## uninstall: flatpak uninstall --user --delete-data eu.betterbird.Betterbird
@@ -377,7 +377,7 @@ sudo dnf install -y librewolf
 log_action "INSTALLING 1PASSWORD"
 sudo rpm --import https://downloads.1password.com/linux/keys/1password.asc
 sudo sh -c 'echo -e "[1password]\nname=1Password Stable Channel\nbaseurl=https://downloads.1password.com/linux/rpm/stable/\$basearch\nenabled=1\ngpgcheck=1\nrepo_gpgcheck=1\ngpgkey=\"https://downloads.1password.com/linux/keys/1password.asc\"" > /etc/yum.repos.d/1password.repo'
-sudo dnf install -y 1password
+sudo dnf check-update -y 1password 1password-cli && sudo dnf install -y 1password 1password-cli
 #############################################################################
 #log_action "INSTALLING globalprotect-openconnect"
 #sudo dnf copr enable -y yuezk/globalprotect-openconnect
@@ -593,8 +593,10 @@ if [ "$USE_1PASSWORD_SSH_AGENT" = "true" ]; then
         log_info "Disabling systemd SSH agent"
         systemctl --user stop ssh-agent.service 2>/dev/null || true
         systemctl --user disable ssh-agent.service 2>/dev/null || true
+        systemctl --user mask ssh-agent.service 2>/dev/null || true
         systemctl --user stop ssh-agent.socket 2>/dev/null || true
         systemctl --user disable ssh-agent.socket 2>/dev/null || true
+        systemctl --user mask ssh-agent.socket 2>/dev/null || true
 
         # Configure shell to use 1Password SSH agent
         log_info "Configuring shell to use 1Password SSH agent"
@@ -617,6 +619,29 @@ export SSH_AUTH_SOCK="$HOME/.1password/agent.sock"\
         else
             log_warn "$HOME/.shellrc not found - SSH_AUTH_SOCK not configured"
         fi
+
+        # Configure systemd user environment
+        log_info "Configuring systemd user environment for 1Password SSH agent"
+        mkdir -p "$HOME/.config/environment.d"
+        if ! grep -q 'SSH_AUTH_SOCK="/home/.*/\.1password/agent\.sock"' "$HOME/.config/environment.d/environment.conf" 2>/dev/null; then
+            echo "SSH_AUTH_SOCK=\"$HOME/.1password/agent.sock\"" >> "$HOME/.config/environment.d/environment.conf"
+            log_success "Added SSH_AUTH_SOCK to environment.d"
+        else
+            log_info "SSH_AUTH_SOCK already configured in environment.d"
+        fi
+
+        # Configure KDE Plasma to use 1Password SSH agent
+        log_info "Configuring KDE Plasma environment for 1Password SSH agent"
+        mkdir -p "$HOME/.config/plasma-workspace/env"
+        cat > "$HOME/.config/plasma-workspace/env/ssh-agent.sh" << EOFPLASMA
+#!/bin/sh
+export SSH_AUTH_SOCK="$HOME/.1password/agent.sock"
+EOFPLASMA
+        chmod +x "$HOME/.config/plasma-workspace/env/ssh-agent.sh"
+        log_success "Created KDE Plasma SSH agent configuration"
+
+        # Set immediately for current session
+        systemctl --user set-environment SSH_AUTH_SOCK="$HOME/.1password/agent.sock" 2>/dev/null || true
 
         log_success "1Password SSH agent configured"
     fi

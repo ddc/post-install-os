@@ -48,57 +48,34 @@
   ansible.builtin.debug:
     msg: "Docker installed: {{ docker_version.stdout }}"
 
-- name: Get latest docker-compose version from GitHub
-  ansible.builtin.uri:
-    url: https://api.github.com/repos/docker/compose/releases/latest
-    return_content: yes
-  register: compose_latest
-  changed_when: false
+- name: Install docker-compose-plugin from repository
+  ansible.builtin.apt:
+    name: docker-compose-plugin
+    state: present
+    update_cache: yes
+  become: yes
 
-- name: Get current docker-compose version
-  ansible.builtin.shell: |
-    if [ -f {{ ansible_env.HOME }}/bin/docker-compose ]; then
-      {{ ansible_env.HOME }}/bin/docker-compose --version 2>/dev/null | awk '{print $4}' || echo "none"
-    else
-      echo "none"
-    fi
-  register: compose_current
-  changed_when: false
-
-- name: Set docker-compose versions
-  ansible.builtin.set_fact:
-    compose_latest_version: "{{ compose_latest.json.tag_name }}"
-    compose_current_version: "{{ compose_current.stdout }}"
-    compose_arch: "{{ 'docker-compose-linux-x86_64' if ansible_architecture == 'x86_64' else 'docker-compose-linux-aarch64' }}"
-
-- name: Download and install docker-compose
-  ansible.builtin.get_url:
-    url: "https://github.com/docker/compose/releases/download/{{ compose_latest_version }}/{{ compose_arch }}"
-    dest: "{{ ansible_env.HOME }}/bin/docker-compose"
-    mode: '0755'
-  when: compose_current_version != compose_latest_version
-
-- name: Create docker CLI plugins directory
+- name: Ensure user bin directory exists
   ansible.builtin.file:
-    path: /usr/libexec/docker/cli-plugins
+    path: "{{ ansible_env.HOME }}/bin"
     state: directory
     mode: '0755'
-  become: yes
-  when: compose_current_version != compose_latest_version
 
-- name: Copy docker-compose to plugin directory
-  ansible.builtin.copy:
-    src: "{{ ansible_env.HOME }}/bin/docker-compose"
-    dest: /usr/libexec/docker/cli-plugins/docker-compose
-    remote_src: yes
-    mode: '0755'
-  become: yes
-  when: compose_current_version != compose_latest_version
+- name: Create symlink to docker-compose in user bin
+  ansible.builtin.file:
+    src: /usr/libexec/docker/cli-plugins/docker-compose
+    dest: "{{ ansible_env.HOME }}/bin/docker-compose"
+    state: link
+    force: yes
+
+- name: Verify docker-compose installation
+  ansible.builtin.command: docker compose version
+  register: compose_version
+  changed_when: false
 
 - name: Display docker-compose version
   ansible.builtin.debug:
-    msg: "docker-compose: {{ compose_current_version }} -> {{ compose_latest_version }}"
-  when: compose_current_version != compose_latest_version
+    msg: "docker-compose installed: {{ compose_version.stdout }}"
 
 ##### CONTAINER DEPLOYMENT #####
 - name: Stop and remove containers with volumes (when cleaning)
