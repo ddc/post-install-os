@@ -1,0 +1,7 @@
+---
+project_name: discordbot
+git_branch: master
+env_type: prod
+project_location: "{{ containers_remote_directory }}/{{ project_name }}"
+logs_location: "/var/log/{{ project_name }}"
+git_repo: "git@github.com:ddc/{{ project_name }}.git"

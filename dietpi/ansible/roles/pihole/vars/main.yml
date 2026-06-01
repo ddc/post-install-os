@@ -1,0 +1,4 @@
+---
+pihole_network: "192.168.1.0/24"
+pihole_gateway: "192.168.1.1"
+pihole_domain: "local"

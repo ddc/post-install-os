@@ -1,0 +1,893 @@
+#!/usr/bin/env bash
+#############################################################################
+set -e          # Exit on error
+set -u          # Error on undefined variables
+set -o pipefail # Pipe failures propagate
+#############################################################################
+RED="\033[1;91m"
+GREEN="\033[1;92m"
+YELLOW="\033[1;93m"
+BLUE="\033[1;94m"
+MAGENTA="\033[1;95m"
+NC="\033[0m"
+#############################################################################
+INFO_MARK="${MAGENTA}ℹ${NC}"
+ACTION_MARK="${BLUE}➜${NC}"
+WARNING_MARK="${YELLOW}⚠${NC}"
+SUCCESS_MARK="${GREEN}✓${NC}"
+ERROR_MARK="${RED}✗${NC}"
+#############################################################################
+log_info() { echo -e "${INFO_MARK} ${MAGENTA}[INFO]${NC} $*"; }
+log_warn() { echo -e "${WARNING_MARK} ${YELLOW}[WARN]${NC} $*"; }
+log_error() { echo -e "${ERROR_MARK} ${RED}[ERROR]${NC} $*"; }
+log_success() { echo -e "${SUCCESS_MARK} ${GREEN}[SUCCESS]${NC} $*"; }
+log_action() { echo -e "${ACTION_MARK} ${BLUE}[ACTION]${NC} $*"; }
+#############################################################################
+[[ $EUID -eq 0 ]] && log_error "Script cannot be run by root" && exit 1
+#############################################################################
+ARCH=$(uname -m)
+DISTRO=$( (source /etc/os-release && echo "$ID") 2>/dev/null || echo "unknown")
+DISTRO_VERSION=$( (source /etc/os-release && echo "$VERSION_ID") 2>/dev/null || echo "unknown")
+#############################################################################
+# Accept Microsoft package EULAs automatically
+export ACCEPT_EULA=Y
+#############################################################################
+if grep -q "Raspberry Pi" /proc/device-tree/model 2>/dev/null ||
+   [[ "$(cat /proc/device-tree/model 2>/dev/null)" == *"Raspberry"* ]] ||
+   [[ -f /etc/rpi-issue ]] ||
+   [[ -f /boot/issue.txt && "$(cat /proc/device-tree/model 2>/dev/null)" == *"Raspberry"* ]]; then
+    DISTRO="raspberrypi"
+else
+    case "$DISTRO" in
+        ubuntu|kubuntu|lubuntu|xubuntu) DISTRO="ubuntu" ;;
+        linuxmint) DISTRO="mint" ;;
+    esac
+fi
+#############################################################################
+case "$ARCH" in
+    x86_64) REMOTE_DOCKER_COMPOSE_FILENAME="docker-compose-linux-x86_64" ;;
+    aarch64|arm*) REMOTE_DOCKER_COMPOSE_FILENAME="docker-compose-linux-aarch64" ;;
+    *)
+        log_error "Unsupported architecture: $ARCH"
+        echo "This script only supports x86_64 and ARM systems."
+        exit 1
+        ;;
+esac
+#############################################################################
+function install_debian_kept_back_pkgs {
+    log_action "Checking for kept-back packages..."
+
+    local list_kept_back
+    list_kept_back=$(sudo apt-get upgrade --dry-run 2>/dev/null | sed -n 's/^ \([^ ]*\)/\1/p' | xargs)
+
+    if [ -n "$list_kept_back" ]; then
+        log_action "Installing kept-back packages: $list_kept_back"
+        sudo apt-get install -y "$list_kept_back"
+    else
+        log_success "No kept-back packages found"
+    fi
+}
+#############################################################################
+function update_debian {
+    log_action "Updating $DISTRO packages..."
+
+    sudo apt update
+    install_debian_kept_back_pkgs
+    sudo apt-get install -y -f
+    sudo apt-get upgrade -y
+    sudo apt-get dist-upgrade -y
+    sudo apt-get full-upgrade -y
+    sudo apt-get autoremove -y --purge
+    sudo apt-get clean
+}
+#############################################################################
+function update_fedora {
+    log_action "Updating $DISTRO packages..."
+
+    local max_attempts
+    local attempt
+    local upgrade_success
+    local dnf_opts
+
+    max_attempts=3
+    attempt=1
+    upgrade_success=false
+    dnf_opts=(
+        --setopt=skip_if_unavailable=True
+        --setopt=retries=5
+        --setopt=timeout=120
+        --setopt=minrate=1000
+        --setopt=fastestmirror=True
+    )
+
+    sudo dnf clean metadata -y
+
+    while [[ $attempt -le $max_attempts ]]; do
+        log_info "Upgrade attempt $attempt of $max_attempts..."
+
+        if sudo dnf upgrade -y "${dnf_opts[@]}" --refresh; then
+            upgrade_success=true
+            break
+        else
+            if [[ $attempt -lt $max_attempts ]]; then
+                log_warn "Attempt $attempt failed, cleaning cache and retrying..."
+                sudo dnf clean all -y
+                sleep 2
+            fi
+            ((attempt++))
+        fi
+    done
+
+    if [[ "$upgrade_success" == false ]]; then
+        log_error "All upgrade attempts failed, but continuing with other tasks..." || true
+    fi
+
+    # log_action "Synchronizing package versions with repositories..."
+    # if ! sudo dnf distro-sync -y "${dnf_opts[@]}" --skip-broken 2>&1; then
+    #     log_warn "distro-sync encountered issues, cleaning metadata and retrying..."
+    #     sudo dnf clean metadata -y
+    #     sudo dnf distro-sync -y "${dnf_opts[@]}" --skip-broken || {
+    #         log_warn "distro-sync failed, but continuing with cleanup..."
+    #     }
+    # fi
+
+    sudo dnf autoremove -y
+    sudo dnf clean all -y
+
+    if command -v akmods &> /dev/null; then
+        # Get all installed kernels (standard, cachyos, xanmod, zen, etc.)
+        local installed_kernels
+        installed_kernels=$(rpm -qa --qf '%{NAME} %{VERSION}-%{RELEASE}.%{ARCH}\n' | \
+            grep -E '^(kernel|kernel-cachyos|kernel-xanmod|kernel-zen) ' | \
+            awk '{print $2}' | sort -Vru)
+
+        local kmod_failures=0
+        local akmods_log_dir="/tmp/akmods-update-$$"
+        mkdir -p "$akmods_log_dir"
+
+        # Cap akmodsbuild parallelism to avoid wedging on stress-induced cc1
+        # crashes during heavy parallel compile (e.g. kernel 6.19.x + nvidia 595.x
+        # on this box at -j32). Override with: AKMODS_JOBS=N update
+        # The patch reverts on normal exit AND on interruption (EXIT trap).
+        local jobs_cap=${AKMODS_JOBS:-8}
+        local akmodsbuild_backup=/tmp/akmodsbuild.update_script.bak
+        local akmodsbuild_patched=0
+
+        _restore_akmodsbuild() {
+            [ -f /tmp/akmodsbuild.update_script.bak ] && \
+                sudo mv -f /tmp/akmodsbuild.update_script.bak /usr/sbin/akmodsbuild 2>/dev/null
+            return 0
+        }
+
+        # Clean up any leftover backup from a previous interrupted run
+        _restore_akmodsbuild
+
+        if sudo cp -p /usr/sbin/akmodsbuild "$akmodsbuild_backup" 2>/dev/null \
+           && sudo sed -i "s|^numberofjobs=\$(grep -c processor /proc/cpuinfo 2> /dev/null)\$|numberofjobs=${jobs_cap}|" /usr/sbin/akmodsbuild \
+           && sudo grep -q "^numberofjobs=${jobs_cap}\$" /usr/sbin/akmodsbuild; then
+            log_info "akmodsbuild parallelism capped to -j${jobs_cap} (override: AKMODS_JOBS=N)"
+            trap '_restore_akmodsbuild' EXIT
+            akmodsbuild_patched=1
+        else
+            log_warn "Could not patch akmodsbuild; running with default parallelism"
+            _restore_akmodsbuild
+        fi
+
+        if [ -n "$installed_kernels" ]; then
+            # Install kernel-devel for all installed kernels
+            log_action "Ensuring kernel-devel is installed for all kernels..."
+            while IFS= read -r kernel_version; do
+                # Determine the appropriate kernel-devel package name
+                local kernel_name
+                kernel_name=$(rpm -qa --qf '%{NAME}\n' | grep -E "^kernel(-cachyos|-xanmod|-zen)?$" | grep -v "kernel-devel" | head -1)
+                local devel_pkg="${kernel_name}-devel-${kernel_version}"
+
+                # Check if kernel-devel is already installed
+                if ! rpm -q "$devel_pkg" &> /dev/null; then
+                    log_info "Installing $devel_pkg..."
+                    sudo dnf install -y "$devel_pkg" 2>/dev/null || {
+                        log_warn "Could not install $devel_pkg, skipping akmods for this kernel"
+                        continue
+                    }
+                fi
+
+                local log_file="${akmods_log_dir}/${kernel_version}.log"
+                local akmods_rc
+                log_action "Building akmods for ${kernel_version} (live; 30-min hard timeout)..."
+                # Stream live AND capture; timeout returns 124 if it had to kill.
+                if timeout --kill-after=30 1800 \
+                       sudo akmods --force --kernels "$kernel_version" 2>&1 \
+                       | tee "$log_file"; then
+                    akmods_rc=0
+                else
+                    akmods_rc="${PIPESTATUS[0]}"
+                fi
+
+                if [ "$akmods_rc" -eq 124 ]; then
+                    log_error "akmods timed out after 30 min for ${kernel_version}; killed."
+                    kmod_failures=$((kmod_failures + 1))
+                    log_warn "Skipping remaining kernels (same toolchain -> same failure expected)"
+                    break
+                elif [ "$akmods_rc" -ne 0 ] || grep -qE 'internal compiler error|Bad exit status|\[FAILED\]' "$log_file"; then
+                    local failed_log
+                    failed_log=$(sudo ls -t /var/cache/akmods/*/${kernel_version}*.failed.log 2>/dev/null | head -1)
+                    log_error "akmods failed for ${kernel_version} (rc=${akmods_rc}); see ${failed_log:-$log_file}"
+                    kmod_failures=$((kmod_failures + 1))
+                    log_warn "Skipping remaining kernels (same toolchain -> same failure expected)"
+                    break
+                fi
+            done <<< "$installed_kernels"
+        else
+            # Fallback to current kernel only if rpm query fails
+            local kernel_version
+            kernel_version=$(uname -r)
+            local log_file="${akmods_log_dir}/${kernel_version}.log"
+            local akmods_rc
+            log_action "Building akmods for ${kernel_version} (live; 30-min hard timeout)..."
+            if timeout --kill-after=30 1800 \
+                   sudo akmods --force 2>&1 \
+                   | tee "$log_file"; then
+                akmods_rc=0
+            else
+                akmods_rc="${PIPESTATUS[0]}"
+            fi
+
+            if [ "$akmods_rc" -eq 124 ]; then
+                log_error "akmods timed out after 30 min; killed."
+                kmod_failures=$((kmod_failures + 1))
+            elif [ "$akmods_rc" -ne 0 ] || grep -qE 'internal compiler error|Bad exit status|\[FAILED\]' "$log_file"; then
+                log_error "akmods failed (rc=${akmods_rc}); see $log_file"
+                kmod_failures=$((kmod_failures + 1))
+            fi
+        fi
+
+        # Restore akmodsbuild on the normal path (EXIT trap covers abnormal exit)
+        if [ "${akmodsbuild_patched:-0}" -eq 1 ]; then
+            _restore_akmodsbuild
+            trap - EXIT
+        fi
+
+        if [ "$kmod_failures" -gt 0 ]; then
+            log_error "Some kernel modules failed to build (see above for details)"
+        else
+            log_success "Kernel modules checked and rebuilt successfully"
+        fi
+    fi
+
+    if command -v flatpak &> /dev/null; then
+        log_action "Checking flatpak packages updates..."
+        output=$(flatpak update -y 2>&1)
+        if echo "$output" | grep -q "Updated"; then
+            echo "$output"
+        else
+            log_success "Flatpak packages already up to date"
+        fi
+    fi
+}
+#############################################################################
+function update_and_ensure_npm_packages {
+    log_action "Checking for NPM packages updates..."
+
+    local npm_path
+    local packages
+    local outdated
+    local has_updates
+
+    npm_path="$HOME/Programs/node/default/bin/npm"
+    #packages=(@google/gemini-cli")
+
+    if [ ! -f "$npm_path" ]; then
+        log_warn "NPM not found, skipping"
+        return 0
+    fi
+
+    # Test NPM is working with a timeout
+    if ! timeout 10 "$npm_path" --version &> /dev/null; then
+        log_warn "NPM not responding, skipping NPM updates"
+        return 0
+    fi
+
+    outdated=$(timeout 30 "$npm_path" outdated -g --json 2>/dev/null || echo "{}")
+    has_updates=false
+
+    if echo "$outdated" | grep -q '"npm"'; then
+        log_info "Updating NPM itself..."
+        timeout 120 "$npm_path" install -g npm &> /dev/null && has_updates=true
+    fi
+
+    if [[ -n "$outdated" ]] && [[ "$outdated" != "{}" ]]; then
+        log_info "Found outdated NPM packages, updating..."
+        timeout 120 "$npm_path" update -g &> /dev/null && has_updates=true
+    fi
+
+    for package in "${packages[@]}"; do
+        if ! timeout 10 "$npm_path" list -g "$package" &> /dev/null; then
+            log_info "Installing missing NPM package: $package"
+            timeout 120 "$npm_path" install -g "$package" &> /dev/null && has_updates=true
+        fi
+    done
+
+    if [[ "$has_updates" == true ]]; then
+        log_success "NPM packages updated"
+    else
+        log_success "NPM packages already up to date"
+    fi
+}
+#############################################################################
+function update_docker_compose {
+    log_action "Checking docker-compose updates..."
+
+    local local_path
+    local plugin_path
+    local latest_version
+    local current_version
+
+    local_path="$HOME/bin/docker-compose"
+    plugin_path="/usr/libexec/docker/cli-plugins/docker-compose"
+    latest_version=$(timeout 30 curl -s --max-time 30 https://api.github.com/repos/docker/compose/releases/latest 2>/dev/null | sed -Ene '/^ *"tag_name": *"(v.+)",$/s//\1/p')
+
+    if [[ -f $local_path ]]; then
+        current_version=$($local_path --version 2>/dev/null | awk '{print $4}' || echo "unknown")
+    elif [[ -f $plugin_path ]]; then
+        current_version=$($plugin_path --version 2>/dev/null | awk '{print $4}' || echo "unknown")
+    else
+        current_version="not installed"
+    fi
+
+    if [[ -z "$latest_version" ]]; then
+        log_error "Failed to fetch latest docker-compose version (network timeout or API error)"
+        return 0
+    fi
+
+    if [[ $current_version != "$latest_version" ]]; then
+        log_action "Updating docker-compose $current_version -> $latest_version"
+
+        if [[ -f $local_path ]]; then
+            sudo rm -rf "$local_path"
+        fi
+        if [[ -f $plugin_path ]]; then
+            sudo rm -rf "$plugin_path"
+        fi
+
+        if timeout 120 curl -L --max-time 120 "https://github.com/docker/compose/releases/download/$latest_version/${REMOTE_DOCKER_COMPOSE_FILENAME}" -o "$local_path" 2>/dev/null; then
+            sudo chmod 755 "$local_path"
+            sudo mkdir -p "$(dirname "$plugin_path")"
+            sudo cp "$local_path" "$plugin_path"
+            sudo chmod 755 "$plugin_path"
+            log_success "docker-compose updated to $latest_version"
+        else
+            log_error "Failed to download docker-compose (network timeout or download error)"
+            return 0
+        fi
+    else
+        log_success "docker-compose is already at latest version $latest_version"
+    fi
+}
+#############################################################################
+function update_docker_buildx {
+    log_action "Checking docker-buildx updates..."
+
+    local plugin_path
+    local latest_version
+    local current_version
+    local buildx_arch
+
+    plugin_path="$HOME/.docker/cli-plugins/docker-buildx"
+
+    case "$ARCH" in
+        x86_64)        buildx_arch="linux-amd64" ;;
+        aarch64|arm*)  buildx_arch="linux-arm64" ;;
+        *)             log_error "Unsupported architecture for buildx: $ARCH"; return 0 ;;
+    esac
+
+    latest_version=$(timeout 30 curl -s --max-time 30 https://api.github.com/repos/docker/buildx/releases/latest 2>/dev/null | grep -o '"tag_name": *"[^"]*"' | cut -d'"' -f4)
+
+    if [[ -z "$latest_version" ]]; then
+        log_error "Failed to fetch latest docker-buildx version (network timeout or API error)"
+        return 0
+    fi
+
+    if [[ -f "$plugin_path" ]]; then
+        current_version=$("$plugin_path" version 2>/dev/null | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' | head -1 || echo "unknown")
+    else
+        current_version="not installed"
+    fi
+
+    if [[ "$current_version" != "$latest_version" ]]; then
+        log_action "Updating docker-buildx $current_version -> $latest_version"
+
+        mkdir -p "$HOME/.docker/cli-plugins"
+        if timeout 120 curl -fsSL --max-time 120 "https://github.com/docker/buildx/releases/download/${latest_version}/buildx-${latest_version}.${buildx_arch}" -o "$plugin_path" 2>/dev/null; then
+            chmod +x "$plugin_path"
+            log_success "docker-buildx updated to $latest_version"
+        else
+            log_error "Failed to download docker-buildx (network timeout or download error)"
+            return 0
+        fi
+    else
+        log_success "docker-buildx is already at latest version $latest_version"
+    fi
+}
+#############################################################################
+function update_uv {
+    log_action "Checking UV updates..."
+    command -v uv &> /dev/null || { log_warn "UV not found"; return 0; }
+
+    local uv_bin
+    local current_version
+    local latest_version
+    local new_version
+
+    uv_bin=$(command -v uv)
+    current_version=$("$uv_bin" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+    latest_version=$(timeout 30 curl -s --max-time 30 https://api.github.com/repos/astral-sh/uv/releases/latest 2>/dev/null | grep -o '"tag_name": *"[^"]*"' | cut -d'"' -f4 | sed 's/^v//')
+
+    if [ -z "$latest_version" ]; then
+        log_error "Failed to fetch latest UV version (network timeout or API error)"
+        update_uv_tools
+        return 0
+    fi
+
+    if [ "$current_version" = "$latest_version" ]; then
+        log_success "UV is already at latest version v$current_version"
+        update_uv_tools
+        return 0
+    fi
+
+    log_info "Updating UV $current_version → $latest_version..."
+
+    # Prefer `uv self update` (talks directly to GitHub, avoids astral.sh CDN
+    # lag where the install script may still serve an older release for hours).
+    # Fall back to the install script when self-update is unavailable.
+    local update_ok=false
+    if "$uv_bin" self update --help &>/dev/null; then
+        if timeout 120 "$uv_bin" self update >/dev/null 2>&1; then
+            update_ok=true
+        else
+            log_warn "uv self update failed; falling back to install script"
+        fi
+    fi
+
+    if [ "$update_ok" = false ]; then
+        if timeout 120 bash -c "curl -LsSf --max-time 60 https://astral.sh/uv/install.sh | sh >/dev/null 2>&1"; then
+            update_ok=true
+        else
+            log_error "UV install script failed or timed out"
+            update_uv_tools
+            return 0
+        fi
+    fi
+
+    hash -r 2>/dev/null || true
+    uv_bin=$(command -v uv || true)
+    if [ -z "$uv_bin" ]; then
+        log_error "UV update failed (binary not found after update)"
+        update_uv_tools
+        return 0
+    fi
+
+    new_version=$("$uv_bin" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+
+    if [ "$new_version" = "$latest_version" ]; then
+        log_success "UV updated to v$new_version"
+    elif [ "$new_version" = "$current_version" ]; then
+        log_warn "UV update ran but binary is still v$current_version (v$latest_version not yet available from installer)"
+    else
+        log_warn "UV updated to v$new_version (target was v$latest_version)"
+    fi
+
+    update_uv_tools
+}
+#############################################################################
+function rebuild_uv_tools_for_python_change {
+    command -v python3 &> /dev/null || return 0
+
+    local system_python
+    local system_python_minor
+    system_python=$(command -v python3)
+    system_python_minor=$("$system_python" --version 2>&1 | grep -oE '[0-9]+\.[0-9]+' | head -1)
+    [ -z "$system_python_minor" ] && return 0
+
+    local uv_tools_dir="${UV_TOOL_DIR:-$HOME/.local/share/uv/tools}"
+    [ -d "$uv_tools_dir" ] || return 0
+
+    local rebuilt=()
+    local failed=()
+    local tool_dir tool_name venv_minor pyvenv_cfg
+
+    for tool_dir in "$uv_tools_dir"/*/; do
+        [ -d "$tool_dir" ] || continue
+        tool_name=$(basename "$tool_dir")
+        pyvenv_cfg="$tool_dir/pyvenv.cfg"
+        [ -f "$pyvenv_cfg" ] || continue
+
+        venv_minor=$(grep -oE '^(version_info|python_version)[[:space:]]*=[[:space:]]*[0-9]+\.[0-9]+' "$pyvenv_cfg" | grep -oE '[0-9]+\.[0-9]+' | head -1)
+        [ -z "$venv_minor" ] && continue
+
+        if [ "$venv_minor" != "$system_python_minor" ]; then
+            log_info "Rebuilding $tool_name on Python $system_python_minor (was $venv_minor)..."
+            if uv tool install --reinstall --python "$system_python" "$tool_name" </dev/null &>/dev/null; then
+                rebuilt+=("$tool_name")
+            else
+                failed+=("$tool_name")
+            fi
+        fi
+    done
+
+    if [ ${#rebuilt[@]} -gt 0 ]; then
+        log_success "Rebuilt UV tool(s) on Python $system_python_minor: ${rebuilt[*]}"
+    fi
+    if [ ${#failed[@]} -gt 0 ]; then
+        log_warn "Failed to rebuild UV tool(s): ${failed[*]}"
+    fi
+}
+#############################################################################
+function update_uv_tools {
+    log_action "Checking UV tools updates..."
+    command -v uv &> /dev/null || { log_warn "UV not found"; return 1; }
+
+    local tool_count=0
+    local uv_list_check
+    uv_list_check=$(uv tool list </dev/null 2>&1 | grep -E "^[a-zA-Z]" || true)
+
+    while IFS= read -r line; do
+        [[ -n "$line" ]] && tool_count=$((tool_count + 1))
+    done <<< "$uv_list_check"
+
+    [ $tool_count -eq 0 ] && log_success "No UV tools installed" && return 0
+
+    # Rebuild venvs whose Python minor version differs from system python3
+    rebuild_uv_tools_for_python_change
+
+    # Run upgrade and capture output
+    local upgrade_output
+    upgrade_output=$(uv tool upgrade --all 2>&1 || true)
+
+    # Strip ANSI escape codes for reliable matching
+    local clean_output
+    clean_output=$(printf '%s' "$upgrade_output" | sed $'s/\033\[[0-9;]*m//g')
+
+    # Check if there were no updates
+    if [[ -z "$clean_output" ]] || [[ "$clean_output" == *"Nothing to upgrade"* ]]; then
+        log_success "UV tools already up to date"
+        return 0
+    fi
+
+    log_action "UV tools updated:"
+    # Print the full upgrade output (header lines + indented package-change details)
+    # Strip empty lines and indent for readability under the header
+    while IFS= read -r line; do
+        [[ -z "$line" ]] && continue
+        echo -e "  $line"
+    done <<< "$clean_output"
+}
+#############################################################################
+function update_precommit {
+    log_action "Refreshing pre-commit git template hook..."
+    command -v pre-commit &> /dev/null || { log_warn "pre-commit not found (install via: uv tool install pre-commit)"; return 0; }
+
+    local tpl="${HOME}/.config/git/template"
+
+    # The pre-commit tool itself is upgraded by update_uv_tools (uv tool upgrade).
+    # This re-pins the global template hook to the current stable interpreter so
+    # freshly cloned/init'd repos never inherit a stale or pruned INSTALL_PYTHON.
+    if pre-commit init-templatedir "$tpl" &>/dev/null; then
+        log_success "pre-commit template hook refreshed ($tpl)"
+    else
+        log_warn "Failed to refresh pre-commit template hook"
+    fi
+
+    # Prune cached hook environments orphaned by tool/Python upgrades.
+    if pre-commit gc &>/dev/null; then
+        log_success "pre-commit cache pruned"
+    fi
+}
+#############################################################################
+function update_rust {
+    log_action "Checking Rust updates..."
+    command -v rustup &> /dev/null || { log_warn "Rustup not found, skipping"; return 0; }
+
+    local current_version
+    current_version=$(rustc --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || echo "unknown")
+
+    rustup update stable --no-self-update &> /dev/null
+
+    local new_version
+    new_version=$(rustc --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || echo "unknown")
+
+    if [[ "$current_version" != "$new_version" ]]; then
+        log_success "Rust updated v$current_version → v$new_version"
+    else
+        log_success "Rust is already at latest version v$current_version"
+    fi
+}
+#############################################################################
+function update_ollama {
+    log_action "Checking Ollama updates..."
+
+    local ollama_home="$HOME/Programs/ollama"
+    local ollama_path="$ollama_home/bin/ollama"
+
+    if [[ ! -f "$ollama_path" ]]; then
+        log_warn "Ollama not found at $ollama_path, skipping"
+        return 0
+    fi
+
+    local current_version
+    local latest_version
+    local ollama_arch
+
+    current_version=$("$ollama_path" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+[0-9.]*' | head -1 || echo "unknown")
+    latest_version=$(timeout 30 curl -s --max-time 30 https://api.github.com/repos/ollama/ollama/releases/latest 2>/dev/null | grep -o '"tag_name": *"[^"]*"' | cut -d'"' -f4 | sed 's/^v//')
+
+    if [[ -z "$latest_version" ]]; then
+        log_error "Failed to fetch latest Ollama version (network timeout or API error)"
+        return 0
+    fi
+
+    if [[ "$current_version" == "$latest_version" ]]; then
+        log_success "Ollama is already at latest version v$current_version"
+        return 0
+    fi
+
+    case "$ARCH" in
+        x86_64)        ollama_arch="amd64" ;;
+        aarch64|arm*)  ollama_arch="arm64" ;;
+        *)             log_error "Unsupported architecture for Ollama: $ARCH"; return 0 ;;
+    esac
+
+    log_action "Updating Ollama v$current_version → v$latest_version..."
+
+    if timeout 120 curl -fsSL --max-time 120 "https://ollama.com/download/ollama-linux-${ollama_arch}.tar.zst" 2>/dev/null \
+        | tar --use-compress-program=unzstd -x -C "$ollama_home"; then
+        systemctl --user restart ollama 2>/dev/null || true
+        log_success "Ollama updated to v$latest_version"
+    else
+        log_error "Failed to download Ollama (network timeout or download error)"
+    fi
+}
+#############################################################################
+function check_and_enroll_mok_if_needed_fedora {
+    [[ "$DISTRO" != "fedora" ]] && return 0
+    command -v mokutil &> /dev/null || return 0
+    command -v akmods &> /dev/null || return 0
+
+    log_action "Checking Secure Boot"
+
+    local sb_status
+    sb_status=$(mokutil --sb-state 2>/dev/null || echo "")
+    if ! echo "$sb_status" | grep -q "SecureBoot enabled"; then
+        log_info "Secure Boot is disabled, skipping MOK check"
+        return 0
+    fi
+    log_success "Secure Boot is enabled"
+
+    #log_action "Checking signed kernel modules..."
+    local modules_ok=true
+    local current_kernel
+    current_kernel=$(uname -r)
+    local any_module_found=false
+
+    for module_dir in /lib/modules/"$current_kernel"/extra/*; do
+        test -d "$module_dir" || continue
+        dir_name=$(basename "$module_dir")
+        any_module_found=true
+
+        check_module="$dir_name"
+        test "$dir_name" = "VirtualBox" && check_module="vboxdrv"
+
+        # Check if module is available (can be loaded)
+        if ! modinfo "$check_module" &>/dev/null; then
+            log_warn "Module not properly signed: $check_module"
+            modules_ok=false
+        fi
+    done
+
+    # If no modules found in extra, skip the check entirely
+    [ "$any_module_found" = false ] && modules_ok=true
+
+    log_action "Checking MOK enrollment..."
+    local mok_enrolled
+    mok_enrolled=$(mokutil --list-enrolled 2>/dev/null | grep -i "akmods" || true)
+
+    if [ -n "$mok_enrolled" ]; then
+        if [ "$modules_ok" = true ]; then
+            log_success "MOK keys enrolled and all kernel modules are properly signed"
+        else
+            log_success "MOK keys are enrolled"
+            log_warn "Some kernel modules are not properly signed"
+            log_info "Rebuild kernel modules with: sudo akmods --force"
+        fi
+        return 0
+    fi
+
+    echo ""
+    log_warn "╔════════════════════════════════════════════════════════╗"
+    log_warn "║  MOK KEYS NOT ENROLLED - Kernel modules can't load!    ║"
+    log_warn "╚════════════════════════════════════════════════════════╝"
+    log_warn "This typically happens after a BIOS update"
+    echo ""
+
+    # Find MOK key file
+    local public_der
+    public_der=$(sudo find /etc/pki/akmods/certs -name "*.der" -not -type l 2>/dev/null | head -n1)
+    # If not found, try the symlink public_key.der
+    if [ -z "$public_der" ]; then
+        public_der="/etc/pki/akmods/certs/public_key.der"
+        sudo test -f "$public_der" || public_der=""
+    fi
+
+    if [ -z "$public_der" ] || ! sudo test -f "$public_der"; then
+        log_error "No MOK key found at /etc/pki/akmods/certs/"
+        log_info "Run your NVIDIA installation script to generate keys first"
+        echo ""
+        return 0  # Don't fail the script, just inform
+    fi
+
+    log_info "Found MOK key: $public_der"
+    log_action "Attempting to re-import MOK key..."
+    echo ""
+    log_info "╔══════════════════════════════════════════════════════════╗"
+    log_info "║              IMPORTANT: MOK PASSWORD                     ║"
+    log_info "╠══════════════════════════════════════════════════════════╣"
+    log_info "║ Set a SIMPLE password (example: nvidia)                  ║"
+    log_info "║ You'll enter it at the BLUE MOK screen during reboot.    ║"
+    log_info "╚══════════════════════════════════════════════════════════╝"
+    echo ""
+
+    if sudo mokutil --import "$public_der"; then
+        echo ""
+        log_success "╔════════════════════════════════════════════════════════╗"
+        log_success "║          MOK KEY IMPORT SCHEDULED!                     ║"
+        log_success "╚════════════════════════════════════════════════════════╝"
+        log_warn "CRITICAL: You MUST REBOOT to complete enrollment"
+        echo ""
+        log_info "During reboot you will see a BLUE MOK Manager screen:"
+        log_info "  1. Press any key when prompted"
+        log_info "  2. Select: Enroll MOK"
+        log_info "  3. Select: Continue"
+        log_info "  4. Enter the password you just set above"
+        log_info "  5. Select: Yes"
+        log_info "  6. System will reboot automatically"
+        echo ""
+        log_info "After reboot, NVIDIA and other kernel modules will work"
+        echo ""
+    else
+        echo ""
+        log_warn "MOK import was cancelled or failed"
+        log_info "You can retry anytime by running this script again"
+        log_info "Or manually: sudo mokutil --import $public_der"
+        echo ""
+        # Don't return 1 - let the script continue
+    fi
+
+    # Always return 0 so script continues
+    return 0
+}
+#############################################################################
+# function update_pipx_apps {
+#     log_action "Checking pipx applications updates"
+#     if ! command -v pipx &> /dev/null; then
+#         log_warn "pipx not found, skipping pipx updates"
+#         return 1
+#     fi
+#     pipx upgrade-all
+# }
+#############################################################################
+function update_bun {
+    log_action "Checking Bun updates..."
+    command -v bun &> /dev/null || { log_warn "Bun not found, skipping"; return 0; }
+
+    local current_version
+    local latest_version
+    local new_version
+
+    current_version=$(bun --version 2>/dev/null || echo "unknown")
+    latest_version=$(timeout 30 curl -s --max-time 30 https://api.github.com/repos/oven-sh/bun/releases/latest 2>/dev/null | grep -o '"tag_name": *"[^"]*"' | cut -d'"' -f4 | sed 's/^bun-v//')
+
+    if [[ -z "$latest_version" ]]; then
+        log_error "Failed to fetch latest Bun version (network timeout or API error)"
+        return 0
+    fi
+
+    if [[ "$current_version" != "$latest_version" ]]; then
+        log_info "Updating Bun v$current_version → v$latest_version..."
+        if timeout 120 bash -c "curl -fsSL --max-time 60 https://bun.sh/install 2>/dev/null | bash >/dev/null 2>&1"; then
+            if command -v bun &>/dev/null; then
+                new_version=$(bun --version 2>/dev/null || echo "unknown")
+                log_success "Bun updated to v$new_version"
+            else
+                log_error "Bun update failed (binary not found)"
+                return 0
+            fi
+        else
+            log_error "Bun installation script failed or timed out"
+            return 0
+        fi
+    else
+        log_success "Bun is already at latest version v$current_version"
+    fi
+}
+#############################################################################
+function update_terraform {
+    log_action "Checking Terraform updates..."
+
+    local terraform_path="$HOME/bin/terraform"
+
+    if [[ ! -f "$terraform_path" ]]; then
+        log_warn "Terraform not found at $terraform_path, skipping"
+        return 0
+    fi
+
+    local current_version
+    local latest_version
+    local tf_arch
+
+    current_version=$("$terraform_path" version -json 2>/dev/null | grep -o '"terraform_version": *"[^"]*"' | cut -d'"' -f4 || echo "unknown")
+    latest_version=$(timeout 30 curl -s --max-time 30 https://api.github.com/repos/hashicorp/terraform/releases/latest 2>/dev/null | grep -o '"tag_name": *"[^"]*"' | cut -d'"' -f4 | sed 's/^v//')
+
+    if [[ -z "$latest_version" ]]; then
+        log_error "Failed to fetch latest Terraform version (network timeout or API error)"
+        return 0
+    fi
+
+    if [[ "$current_version" == "$latest_version" ]]; then
+        log_success "Terraform is already at latest version v$current_version"
+        return 0
+    fi
+
+    case "$ARCH" in
+        x86_64)        tf_arch="amd64" ;;
+        aarch64|arm*)  tf_arch="arm64" ;;
+        *)             log_error "Unsupported architecture for Terraform: $ARCH"; return 0 ;;
+    esac
+
+    log_action "Updating Terraform v$current_version → v$latest_version..."
+
+    local tmp_zip="/tmp/terraform.zip"
+    if timeout 120 curl -fsSL --max-time 120 "https://releases.hashicorp.com/terraform/${latest_version}/terraform_${latest_version}_linux_${tf_arch}.zip" -o "$tmp_zip" 2>/dev/null; then
+        sudo unzip -o "$tmp_zip" -d "$HOME/bin" > /dev/null
+        rm -f "$tmp_zip" "$HOME/bin/LICENSE.txt"
+        log_success "Terraform updated to v$latest_version"
+    else
+        rm -f "$tmp_zip"
+        log_error "Failed to download Terraform (network timeout or download error)"
+    fi
+}
+#############################################################################
+log_info "Distribution: $DISTRO ($DISTRO_VERSION)"
+log_info "Architecture: $ARCH"
+echo
+case $DISTRO in
+    raspberrypi)
+        update_debian
+        ;;
+    debian|ubuntu|mint)
+        update_debian
+        update_and_ensure_npm_packages
+        #update_docker_compose
+        update_uv
+        update_precommit
+        update_terraform
+        #update_ollama
+        ;;
+    fedora)
+        update_fedora
+        check_and_enroll_mok_if_needed_fedora
+        update_and_ensure_npm_packages
+        update_bun
+        update_docker_buildx
+        update_rust
+        update_uv
+        update_precommit
+        update_terraform
+        #update_ollama
+        ;;
+    *)
+        log_error "Unsupported distribution: $DISTRO"
+        echo "Supported distributions: raspberrypi, debian, ubuntu, mint, fedora"
+        exit 1
+        ;;
+esac
+echo
+log_info "System update completed!"

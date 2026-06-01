@@ -1,0 +1,151 @@
+---
+# Deploys the ddc/DiscordBot project as Docker containers, connecting to the
+# shared 'postgres' container over the postgres_network
+
+- name: Check if discordbot directory exists
+  ansible.builtin.stat:
+    path: "{{ project_location }}"
+  register: discordbot_dir
+
+- name: Stop existing discordbot containers
+  ansible.builtin.command: ./stop.sh
+  args:
+    chdir: "{{ project_location }}/utilities"
+  become_user: "{{ new_users[0].name }}"
+  when: discordbot_dir.stat.exists
+  changed_when: true
+  failed_when: false
+
+- name: Remove existing discordbot directory
+  ansible.builtin.file:
+    path: "{{ project_location }}"
+    state: absent
+  become: yes
+
+- name: Create discordbot project directory
+  ansible.builtin.file:
+    path: "{{ project_location }}"
+    state: directory
+    owner: "{{ new_users[0].name }}"
+    group: "{{ new_users[0].name }}"
+    mode: '0755'
+  become: yes
+
+- name: Create discordbot logs directory (owned by uid 1000 = container botuser)
+  ansible.builtin.file:
+    path: "{{ logs_location }}"
+    state: directory
+    owner: "1000"
+    group: "1000"
+    mode: '0755'
+  become: yes
+
+- name: Test SSH connectivity to GitHub
+  ansible.builtin.command: ssh -T git@github.com -o StrictHostKeyChecking=no
+  register: github_ssh_test
+  changed_when: false
+  failed_when: false
+  become_user: "{{ new_users[0].name }}"
+
+- name: Clone discordbot repository
+  ansible.builtin.git:
+    repo: "{{ git_repo }}"
+    dest: "{{ project_location }}"
+    version: "{{ git_branch }}"
+    single_branch: yes
+    force: yes
+  become_user: "{{ new_users[0].name }}"
+
+- name: Remove repository logs directory
+  ansible.builtin.file:
+    path: "{{ project_location }}/logs"
+    state: absent
+  become: yes
+
+- name: Symlink logs directory to centralized location
+  ansible.builtin.file:
+    src: "{{ logs_location }}"
+    dest: "{{ project_location }}/logs"
+    state: link
+    force: yes
+  become_user: "{{ new_users[0].name }}"
+
+- name: Set ownership of cloned repository
+  ansible.builtin.file:
+    path: "{{ project_location }}"
+    owner: "{{ new_users[0].name }}"
+    group: "{{ new_users[0].name }}"
+    recurse: yes
+  become: yes
+
+- name: Upload .env file ({{ env_type }})
+  ansible.builtin.copy:
+    src: ".env.{{ env_type }}"
+    dest: "{{ project_location }}/.env"
+    owner: "{{ new_users[0].name }}"
+    group: "{{ new_users[0].name }}"
+    mode: '0600'
+  become: yes
+
+- name: Make utilities scripts executable
+  ansible.builtin.shell: chmod 755 {{ project_location }}/utilities/*.sh
+  become: yes
+  changed_when: true
+
+- name: Patch utilities/*.sh to derive PROJECT_DIR from script location (defensive; no-op once upstream is fixed)
+  ansible.builtin.replace:
+    path: "{{ project_location }}/utilities/{{ item }}"
+    regexp: '^PROJECT_DIR=.*$'
+    replace: 'PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"'
+  loop:
+    - start.sh
+    - stop.sh
+    - update.sh
+
+- name: Wait for postgres container to be healthy
+  ansible.builtin.shell: docker inspect --format='{% raw %}{{.State.Health.Status}}{% endraw %}' postgres
+  register: postgres_health
+  until: postgres_health.stdout == "healthy"
+  retries: 30
+  delay: 5
+  become_user: "{{ new_users[0].name }}"
+  changed_when: false
+
+- name: Build and start discordbot containers
+  ansible.builtin.command: ./start.sh
+  args:
+    chdir: "{{ project_location }}/utilities"
+  become_user: "{{ new_users[0].name }}"
+  changed_when: true
+
+- name: Wait for discordbot container to be running
+  ansible.builtin.shell: docker ps --format '{% raw %}{{.Names}}{% endraw %}' | grep -q '^discordbot$'
+  register: discordbot_running
+  until: discordbot_running.rc == 0
+  retries: 30
+  delay: 5
+  become_user: "{{ new_users[0].name }}"
+  changed_when: false
+  failed_when: false
+
+- name: Check discordbot container status
+  ansible.builtin.shell: >
+    docker ps -a --format '{% raw %}{{.Names}}\t{{.Status}}{% endraw %}' | grep -E '^discordbot'
+  register: discordbot_status
+  changed_when: false
+  failed_when: false
+  become_user: "{{ new_users[0].name }}"
+
+- name: Fail if no discordbot containers are running
+  ansible.builtin.fail:
+    msg: "No discordbot containers are running. Check 'docker logs discordbot' / 'docker logs discordbot_alembic'."
+  when: discordbot_running.rc != 0
+  any_errors_fatal: true
+
+- name: Display discordbot deployment info
+  ansible.builtin.debug:
+    msg: |
+      DiscordBot deployed!
+      Containers:
+      {{ discordbot_status.stdout }}
+      Logs: {{ logs_location }}

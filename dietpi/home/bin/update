@@ -1,0 +1,87 @@
+#!/usr/bin/env bash
+#############################################################################
+set -e          # Exit on error
+set -u          # Error on undefined variables
+set -o pipefail # Pipe failures propagate
+#############################################################################
+RED="\033[1;91m"
+GREEN="\033[1;92m"
+YELLOW="\033[1;93m"
+BLUE="\033[1;94m"
+MAGENTA="\033[1;95m"
+NC="\033[0m"
+#############################################################################
+INFO_MARK="${MAGENTA}ℹ${NC}"
+ACTION_MARK="${BLUE}➜${NC}"
+WARNING_MARK="${YELLOW}⚠${NC}"
+SUCCESS_MARK="${GREEN}✓${NC}"
+ERROR_MARK="${RED}✗${NC}"
+#############################################################################
+log_info() { echo -e "${INFO_MARK} ${MAGENTA}[INFO]${NC} $*"; }
+log_warn() { echo -e "${WARNING_MARK} ${YELLOW}[WARN]${NC} $*"; }
+log_error() { echo -e "${ERROR_MARK} ${RED}[ERROR]${NC} $*"; }
+log_success() { echo -e "${SUCCESS_MARK} ${GREEN}[SUCCESS]${NC} $*"; }
+log_action() { echo -e "${ACTION_MARK} ${BLUE}[ACTION]${NC} $*"; }
+#############################################################################
+[[ $EUID -eq 0 ]] && log_error "Script cannot be run by root" && exit 1
+#############################################################################
+export ACCEPT_EULA=Y
+#############################################################################
+ARCH=$(uname -m)
+DISTRO=$( (source /etc/os-release && echo "$ID") 2>/dev/null || echo "unknown")
+DISTRO_VERSION=$( (source /etc/os-release && echo "$VERSION_ID") 2>/dev/null || echo "unknown")
+#############################################################################
+if grep -q "Raspberry Pi" /proc/device-tree/model 2>/dev/null ||
+   [[ "$(cat /proc/device-tree/model 2>/dev/null)" == *"Raspberry"* ]] ||
+   [[ -f /etc/rpi-issue ]] ||
+   [[ -f /boot/issue.txt && "$(cat /proc/device-tree/model 2>/dev/null)" == *"Raspberry"* ]]; then
+    DISTRO="raspberrypi"
+else
+    case "$DISTRO" in
+        ubuntu|kubuntu|lubuntu|xubuntu) DISTRO="ubuntu" ;;
+        linuxmint) DISTRO="mint" ;;
+    esac
+fi
+#############################################################################
+function update_debian {
+    log_action "Updating $DISTRO packages..."
+
+    sudo apt update
+    sudo apt-get install -y -f
+    sudo apt-get upgrade -y
+    sudo apt-get dist-upgrade -y
+    sudo apt-get full-upgrade -y
+    # autoremove can refuse when a new kernel was installed but we are still
+    # running the old one (apt blocks removing the running kernel — by design).
+    # Treat that as non-fatal: tell the user to reboot and re-run later.
+    if ! sudo apt-get autoremove -y --purge; then
+        log_warn "autoremove failed (likely a pending kernel upgrade — reboot required)."
+        log_warn "After reboot, re-run this script to clean up obsolete kernel packages."
+    fi
+    sudo apt-get clean
+}
+#############################################################################
+log_info "Distribution: $DISTRO ($DISTRO_VERSION)"
+log_info "Architecture: $ARCH"
+echo
+case $DISTRO in
+    raspberrypi|debian|ubuntu|mint)
+        update_debian
+        sudo /boot/dietpi/dietpi-update
+        ;;
+    *)
+        log_error "Unsupported distribution: $DISTRO"
+        echo "Supported distributions: raspberrypi, debian, ubuntu, mint"
+        exit 1
+        ;;
+esac
+echo
+log_info "System update completed!"
+
+
+#dietpi-update   : Update DietPi between versions
+#dietpi-launcher : All the DietPi programs in one place
+#dietpi-config   : Feature rich configuration tool for your device
+#dietpi-software : Select optimised software for installation
+#htop            : Resource monitor
+#cpu             : Shows CPU information and stats

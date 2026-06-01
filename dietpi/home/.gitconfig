@@ -1,0 +1,33 @@
+[core]
+autocrlf=input
+symlinks=false
+autocrlf=false
+fscache=true
+
+[color]
+diff=auto
+status=auto
+branch=auto
+interactive=true
+
+[help]
+format=html
+
+[rebase]
+autosquash=true
+
+[credential]
+helper=manager
+
+[difftool.sourcetree]
+cmd='' "$LOCAL" "$REMOTE"
+
+[mergetool.sourcetree]
+cmd=''
+trustexitcode=true
+
+[filter.lfs]
+clean=git-lfs clean -- %f
+smudge=git-lfs smudge -- %f
+process=git-lfs filter-process
+required=true

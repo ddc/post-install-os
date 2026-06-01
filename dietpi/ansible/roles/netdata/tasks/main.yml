@@ -1,0 +1,85 @@
+---
+# Self-contained netdata deployment/upgrade role.
+
+- name: Ensure netdata container directory exists on host
+  ansible.builtin.file:
+    path: "{{ containers_remote_directory }}/netdata"
+    state: directory
+    owner: "{{ new_users[0].name }}"
+    group: "{{ new_users[0].name }}"
+    mode: '0755'
+  become: yes
+
+- name: Copy netdata container files
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../containers/netdata/"
+    dest: "{{ containers_remote_directory }}/netdata/"
+    owner: "{{ new_users[0].name }}"
+    group: "{{ new_users[0].name }}"
+    mode: '0644'
+    directory_mode: '0755'
+  become: yes
+
+- name: Make update_netdata.sh executable
+  ansible.builtin.file:
+    path: "{{ containers_remote_directory }}/netdata/update_netdata.sh"
+    mode: '0755'
+  become: yes
+
+- name: Check if netdata container is running
+  ansible.builtin.shell: docker ps --format '{{ "{{" }}.Names{{ "}}" }}' | grep -q '^netdata$'
+  become_user: "{{ new_users[0].name }}"
+  register: netdata_running
+  changed_when: false
+  failed_when: false
+
+- name: Start netdata fresh (first-time install)
+  ansible.builtin.shell: docker compose up -d
+  args:
+    chdir: "{{ containers_remote_directory }}/netdata"
+  become_user: "{{ new_users[0].name }}"
+  when: netdata_running.rc != 0
+
+- name: Run update_netdata.sh (pull + restart + prune)
+  ansible.builtin.shell: ./update_netdata.sh
+  args:
+    chdir: "{{ containers_remote_directory }}/netdata"
+  become_user: "{{ new_users[0].name }}"
+  when: netdata_running.rc == 0
+  register: netdata_update_result
+
+- name: Display netdata update output
+  ansible.builtin.debug:
+    var: netdata_update_result.stdout_lines
+  when:
+    - netdata_update_result is defined
+    - netdata_update_result.stdout_lines is defined
+
+##### FIREWALL RULES #####
+
+- name: Check if UFW is available (netdata)
+  ansible.builtin.command: which ufw
+  register: netdata_ufw_check
+  changed_when: false
+  failed_when: false
+  when: firewall_enable
+
+- name: Read Netdata .env for port
+  ansible.builtin.shell: |
+    grep 'NETDATA_PORT=' {{ containers_remote_directory }}/netdata/.env | cut -d '=' -f 2
+  register: netdata_port
+  changed_when: false
+  failed_when: false
+  when: firewall_enable
+
+- name: Allow Netdata port through firewall
+  become: yes
+  community.general.ufw:
+    rule: allow
+    port: "{{ netdata_port.stdout }}"
+    proto: tcp
+    comment: 'Netdata Web'
+  when:
+    - firewall_enable
+    - netdata_ufw_check.rc == 0
+    - netdata_port.stdout | length > 0

@@ -1,0 +1,10 @@
+---
+hostname: "DietPi"
+
+# Initial installation packages
+install_packages:
+  - vim
+  - git
+  - nmap
+  - btop
+  - zstd

@@ -1,0 +1,324 @@
+---
+# Self-contained pihole deployment/upgrade role.
+
+##### LOCAL CONFIG PREP #####
+
+- name: Update local Pi-hole pihole.toml
+  ansible.builtin.lineinfile:
+    path: "{{ playbook_dir }}/../containers/pihole/pihole.toml"
+    regexp: '^revServers\s*='
+    line: 'revServers = ["true,{{ pihole_network }},{{ pihole_gateway }},{{ pihole_domain }}"]'
+    state: present
+  delegate_to: localhost
+
+- name: Set webserver threads based on CPU cores (cores * 2)
+  ansible.builtin.lineinfile:
+    path: "{{ playbook_dir }}/../containers/pihole/pihole.toml"
+    regexp: '^#?\s*threads\s*='
+    line: 'threads = {{ ansible_processor_vcpus * 2 }}'
+    state: present
+  delegate_to: localhost
+
+##### HOST DNS CONFIG #####
+
+- name: Check if resolvconf is installed
+  ansible.builtin.command: which resolvconf
+  register: resolvconf_check
+  changed_when: false
+  failed_when: false
+
+- name: Configure DNS with Pi-hole primary + fallback (using resolvconf)
+  ansible.builtin.blockinfile:
+    path: /etc/resolvconf/resolv.conf.d/head
+    block: |
+      # Upstream DNS (host should NOT use localhost to avoid DNS loop)
+      # Quad9 with malware filtering
+      nameserver 2620:fe::11
+      nameserver 9.9.9.11
+      # Quad9 fallback with malware filtering
+      nameserver 2620:fe::fe:11
+      nameserver 149.112.112.11
+      # Cloudflare fallback DNS (IPv6 + IPv4)
+      nameserver 2606:4700:4700::1111
+      nameserver 1.1.1.1
+      nameserver 2606:4700:4700::1001
+      nameserver 1.0.0.1
+    marker: "# {mark} ANSIBLE MANAGED - DNS Configuration"
+    create: yes
+  become: yes
+  when: resolvconf_check.rc == 0
+
+- name: Configure DNS directly in /etc/resolv.conf (fallback method)
+  ansible.builtin.blockinfile:
+    path: /etc/resolv.conf
+    block: |
+      # Upstream DNS (host should NOT use localhost to avoid DNS loop)
+      # Quad9 with malware filtering
+      nameserver 2620:fe::11
+      nameserver 9.9.9.11
+      # Quad9 fallback with malware filtering
+      nameserver 2620:fe::fe:11
+      nameserver 149.112.112.11
+      # Cloudflare fallback DNS (IPv6 + IPv4)
+      nameserver 2606:4700:4700::1111
+      nameserver 1.1.1.1
+      nameserver 2606:4700:4700::1001
+      nameserver 1.0.0.1
+    marker: "# {mark} ANSIBLE MANAGED - DNS Configuration"
+  become: yes
+  when: resolvconf_check.rc != 0
+
+- name: Prevent DHCP from overwriting DNS configuration (IPv4)
+  ansible.builtin.lineinfile:
+    path: /etc/dhcp/dhclient.conf
+    regexp: '^#?supersede domain-name-servers'
+    line: 'supersede domain-name-servers 9.9.9.11, 149.112.112.11, 1.1.1.1, 1.0.0.1;'
+    create: yes
+  become: yes
+  when: ansible_os_family == "Debian"
+
+- name: Prevent DHCP from overwriting DNS configuration (IPv6)
+  ansible.builtin.lineinfile:
+    path: /etc/dhcp/dhclient6.conf
+    regexp: '^#?supersede domain-name-servers'
+    line: 'supersede domain-name-servers 2620:fe::11, 2620:fe::fe:11, 2606:4700:4700::1111, 2606:4700:4700::1001;'
+    create: yes
+  become: yes
+  when: ansible_os_family == "Debian"
+
+- name: Update resolvconf to apply DNS changes
+  ansible.builtin.command: resolvconf -u
+  become: yes
+  changed_when: false
+  when: resolvconf_check.rc == 0
+
+##### CONTAINER DEPLOY / UPDATE #####
+
+- name: Clean pihole (when requested)
+  ansible.builtin.shell: |
+    if [ -d "{{ containers_remote_directory }}/pihole" ]; then
+      cd {{ containers_remote_directory }}/pihole && docker compose down -v --remove-orphans
+    fi
+    docker volume ls -q | grep -E '^pihole' | xargs -r docker volume rm || true
+    docker network ls -q --filter name=pihole | xargs -r docker network rm || true
+  become_user: "{{ new_users[0].name }}"
+  when: "'pihole' in containers_clean_on_deploy"
+  failed_when: false
+
+- name: Remove pihole directory (when cleaning)
+  ansible.builtin.file:
+    path: "{{ containers_remote_directory }}/pihole"
+    state: absent
+  become: yes
+  when: "'pihole' in containers_clean_on_deploy"
+
+- name: Ensure pihole container directory exists on host
+  ansible.builtin.file:
+    path: "{{ containers_remote_directory }}/pihole"
+    state: directory
+    owner: "{{ new_users[0].name }}"
+    group: "{{ new_users[0].name }}"
+    mode: '0755'
+  become: yes
+
+- name: Copy pihole container files
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../containers/pihole/"
+    dest: "{{ containers_remote_directory }}/pihole/"
+    owner: "{{ new_users[0].name }}"
+    group: "{{ new_users[0].name }}"
+    mode: '0644'
+    directory_mode: '0755'
+  become: yes
+
+- name: Make shell scripts executable
+  ansible.builtin.shell: find {{ containers_remote_directory }}/pihole/ -name "*.sh" -exec chmod 0755 {} +
+  become: yes
+  changed_when: true
+
+- name: Check if pihole container is running
+  ansible.builtin.shell: docker ps --format '{{ "{{" }}.Names{{ "}}" }}' | grep -q '^pihole$'
+  become_user: "{{ new_users[0].name }}"
+  register: pihole_running
+  changed_when: false
+  failed_when: false
+
+- name: Start pihole fresh (first-time install)
+  ansible.builtin.shell: docker compose up -d
+  args:
+    chdir: "{{ containers_remote_directory }}/pihole"
+  become_user: "{{ new_users[0].name }}"
+  when: pihole_running.rc != 0
+
+- name: Run update_pihole.sh (pull + restart + gravity update)
+  ansible.builtin.shell: ./update_pihole.sh
+  args:
+    chdir: "{{ containers_remote_directory }}/pihole"
+  become_user: "{{ new_users[0].name }}"
+  when: pihole_running.rc == 0
+  register: pihole_update_result
+
+- name: Display pihole update output
+  ansible.builtin.debug:
+    var: pihole_update_result.stdout_lines
+  when:
+    - pihole_update_result is defined
+    - pihole_update_result.stdout_lines is defined
+
+##### POST-START TASKS #####
+
+- name: Wait for Pi-hole container to exist
+  ansible.builtin.shell: |
+    for i in {1..30}; do
+      if docker ps -a --format '{{ "{{" }}.Names{{ "}}" }}' | grep -q '^pihole$'; then
+        exit 0
+      fi
+      sleep 1
+    done
+    exit 1
+  args:
+    executable: /bin/bash
+  register: pihole_exists
+  failed_when: "pihole_exists.rc != 0"
+  changed_when: false
+
+- name: Wait for Pi-hole container to be healthy
+  ansible.builtin.shell: |
+    echo "Waiting for Pi-hole healthcheck (up to 90 seconds)..."
+    for i in {1..45}; do
+      STATUS=$(docker inspect pihole --format='{{ "{{" }}.State.Health.Status{{ "}}" }}' 2>/dev/null || echo "unknown")
+      echo "Attempt $i/45: Status = $STATUS"
+      if [ "$STATUS" = "healthy" ]; then
+        echo "Pi-hole is healthy!"
+        exit 0
+      fi
+      sleep 2
+    done
+    echo "Timeout: Pi-hole did not become healthy"
+    exit 1
+  args:
+    executable: /bin/bash
+  register: pihole_health
+  failed_when: "pihole_health.rc != 0"
+  changed_when: false
+
+- name: Install sqlite3 permanently in Pi-hole container
+  ansible.builtin.shell: |
+    if ! docker exec pihole which sqlite3 >/dev/null 2>&1; then
+      docker exec pihole apk add --no-cache sqlite
+      exit 1
+    fi
+  register: sqlite_install
+  changed_when: sqlite_install.rc != 0
+  failed_when: false
+
+- name: Sync blocklists from blocklists.txt
+  ansible.builtin.shell: bash import_blocklists.sh
+  args:
+    chdir: "{{ containers_remote_directory }}/pihole"
+  become_user: "{{ new_users[0].name }}"
+  register: import_result
+  tags:
+    - pihole_blocklists
+
+- name: Display blocklist sync results
+  ansible.builtin.debug:
+    var: import_result.stdout_lines
+  when:
+    - import_result is defined
+    - import_result.stdout_lines is defined
+  tags:
+    - pihole_blocklists
+
+- name: Check Pi-hole database size
+  ansible.builtin.shell: docker exec pihole sqlite3 /etc/pihole/pihole-FTL.db "SELECT COUNT(*) FROM queries;"
+  register: db_size
+  changed_when: false
+  failed_when: false
+  tags:
+    - pihole_cleanup
+
+- name: Prune old queries if database is too large (automatic maintenance)
+  ansible.builtin.shell: |
+    docker exec pihole sqlite3 /etc/pihole/pihole-FTL.db "DELETE FROM queries WHERE timestamp < strftime('%s', 'now', '-30 days');"
+    docker exec pihole sqlite3 /etc/pihole/pihole-FTL.db "VACUUM;"
+  when:
+    - db_size.stdout is defined
+    - db_size.stdout | int > 100000
+  register: prune_result
+  tags:
+    - pihole_cleanup
+
+- name: Display database cleanup result
+  ansible.builtin.debug:
+    msg: "Database had {{ db_size.stdout }} queries. Pruned queries older than 30 days."
+  when:
+    - prune_result is defined
+    - prune_result is changed
+  tags:
+    - pihole_cleanup
+
+##### CRON #####
+
+- name: Create cron job for weekly Pi-hole updates (every Monday at Midnight)
+  ansible.builtin.cron:
+    name: "Update Pi-hole container and gravity"
+    minute: "0"
+    hour: "0"
+    weekday: "1"
+    user: "{{ new_users[0].name }}"
+    job: "cd {{ containers_remote_directory }}/pihole && ./update_pihole.sh >> /var/log/pihole-update.log 2>&1"
+    state: present
+
+##### FIREWALL RULES #####
+
+- name: Check if UFW is available (pihole)
+  ansible.builtin.command: which ufw
+  register: pihole_ufw_check
+  changed_when: false
+  failed_when: false
+  when: firewall_enable
+
+- name: Allow DNS TCP through firewall
+  become: yes
+  community.general.ufw:
+    rule: allow
+    port: '53'
+    proto: tcp
+    comment: 'DNS TCP'
+  when:
+    - firewall_enable
+    - pihole_ufw_check.rc == 0
+
+- name: Allow DNS UDP through firewall
+  become: yes
+  community.general.ufw:
+    rule: allow
+    port: '53'
+    proto: udp
+    comment: 'DNS UDP'
+  when:
+    - firewall_enable
+    - pihole_ufw_check.rc == 0
+
+- name: Allow Pi-hole web interface HTTP
+  become: yes
+  community.general.ufw:
+    rule: allow
+    port: '80'
+    proto: tcp
+    comment: 'Pi-hole Web Interface'
+  when:
+    - firewall_enable
+    - pihole_ufw_check.rc == 0
+
+- name: Allow Pi-hole web interface HTTPS
+  become: yes
+  community.general.ufw:
+    rule: allow
+    port: '443'
+    proto: tcp
+    comment: 'Pi-hole HTTPS'
+  when:
+    - firewall_enable
+    - pihole_ufw_check.rc == 0

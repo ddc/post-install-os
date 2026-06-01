@@ -1,0 +1,93 @@
+---
+- name: Detect current IPv6 SLAAC address
+  ansible.builtin.shell: "ip -6 addr show {{ network_interface }} | grep 'scope global dynamic' | awk '{print $2}' | head -1"
+  register: slaac_address
+  changed_when: false
+  failed_when: false
+  when: static_ipv6_enable
+
+- name: Extract IPv6 prefix from SLAAC address
+  ansible.builtin.set_fact:
+    ipv6_prefix: "{{ slaac_address.stdout.split(':')[0:4] | join(':') }}"
+  when:
+    - static_ipv6_enable
+    - slaac_address.stdout | length > 0
+
+- name: Detect current IPv6 gateway
+  ansible.builtin.shell: "ip -6 route show default | grep -oP 'via \\K[^ ]+'"
+  register: detected_gateway
+  changed_when: false
+  failed_when: false
+  when: static_ipv6_enable
+
+- name: Set dynamic IPv6 variables
+  ansible.builtin.set_fact:
+    static_ipv6_address: "{{ ipv6_prefix }}::{{ static_ipv6_host | default('100') }}/64"
+    static_ipv6_gateway: "{{ detected_gateway.stdout }}"
+  when:
+    - static_ipv6_enable
+    - ipv6_prefix is defined
+    - detected_gateway.stdout | length > 0
+
+- name: Display detected IPv6 configuration
+  ansible.builtin.debug:
+    msg:
+      - "Detected IPv6 prefix: {{ ipv6_prefix }}"
+      - "Detected gateway: {{ detected_gateway.stdout }}"
+      - "Static IPv6 address will be: {{ static_ipv6_address }}"
+  when:
+    - static_ipv6_enable
+    - ipv6_prefix is defined
+
+- name: Check if static IPv6 is already configured
+  ansible.builtin.shell: "ip -6 addr show {{ network_interface }} | grep '{{ static_ipv6_address.split('/')[0] }}'"
+  register: ipv6_check
+  changed_when: false
+  failed_when: false
+  when:
+    - static_ipv6_enable
+    - static_ipv6_address is defined
+
+- name: Add static IPv6 address to network interface
+  ansible.builtin.command: "ip -6 addr add {{ static_ipv6_address }} dev {{ network_interface }}"
+  become: yes
+  when:
+    - static_ipv6_enable
+    - static_ipv6_address is defined
+    - ipv6_check.rc != 0
+
+- name: Add default IPv6 gateway
+  ansible.builtin.command: "ip -6 route add default via {{ static_ipv6_gateway }} dev {{ network_interface }}"
+  become: yes
+  when:
+    - static_ipv6_enable
+    - static_ipv6_gateway is defined
+  failed_when: false
+  changed_when: true
+
+- name: Create systemd-networkd config for persistent IPv6
+  ansible.builtin.copy:
+    content: |
+      [Match]
+      Name={{ network_interface }}
+
+      [Network]
+      Address={{ static_ipv6_address }}
+      Gateway={{ static_ipv6_gateway }}
+    dest: /etc/systemd/network/10-{{ network_interface }}-static-ipv6.network
+    mode: '0644'
+  become: yes
+  when:
+    - static_ipv6_enable
+    - static_ipv6_address is defined
+
+- name: Display IPv6 configuration
+  ansible.builtin.command: ip -6 addr show {{ network_interface }}
+  register: ipv6_result
+  changed_when: false
+  when: static_ipv6_enable
+
+- name: Show IPv6 addresses
+  ansible.builtin.debug:
+    msg: "IPv6 configured: {{ ipv6_result.stdout_lines }}"
+  when: static_ipv6_enable

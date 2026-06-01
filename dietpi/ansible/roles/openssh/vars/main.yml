@@ -1,0 +1,17 @@
+---
+# Note: ssh_port stays in group_vars/all.yml because the firewall role also
+# needs it and can run (via container tags) without the openssh role.
+ssh_root_login: false
+ssh_password_auth: false
+ssh_pubkey_auth: true
+ssh_client_alive_interval: 300
+ssh_ciphers:
+  - chacha20-poly1305@openssh.com
+  - aes256-gcm@openssh.com
+  - aes256-ctr
+ssh_macs:
+  - hmac-sha2-512-etm@openssh.com
+  - hmac-sha2-512
+ssh_kex_algorithms:
+  - curve25519-sha256
+  - curve25519-sha256@libssh.org

@@ -1,0 +1,87 @@
+---
+- name: Check if Docker is already installed
+  ansible.builtin.command: which docker
+  register: docker_check
+  changed_when: false
+  failed_when: false
+
+- name: Install Docker using official script
+  ansible.builtin.shell: |
+    curl -fsSL https://get.docker.com -o get-docker.sh
+    sh get-docker.sh
+    rm get-docker.sh
+  args:
+    creates: /usr/bin/docker
+  become: yes
+  when: docker_check.rc != 0
+
+- name: Add all users to docker group
+  ansible.builtin.user:
+    name: "{{ item.name }}"
+    groups: docker
+    append: yes
+  become: yes
+  loop: "{{ new_users }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Unmask Docker service
+  ansible.builtin.systemd:
+    name: docker
+    masked: no
+  become: yes
+
+- name: Enable and start Docker service
+  ansible.builtin.systemd:
+    name: docker
+    enabled: yes
+    state: started
+    daemon_reload: yes
+  become: yes
+
+- name: Verify Docker installation
+  ansible.builtin.command: docker --version
+  register: docker_version
+  changed_when: false
+
+- name: Display Docker version
+  ansible.builtin.debug:
+    msg: "Docker installed: {{ docker_version.stdout }}"
+
+- name: Install docker-compose-plugin from repository
+  ansible.builtin.apt:
+    name: docker-compose-plugin
+    state: present
+    update_cache: yes
+  become: yes
+
+- name: Ensure user bin directory exists
+  ansible.builtin.file:
+    path: "{{ ansible_env.HOME }}/bin"
+    state: directory
+    mode: '0755'
+
+- name: Create symlink to docker-compose in user bin
+  ansible.builtin.file:
+    src: /usr/libexec/docker/cli-plugins/docker-compose
+    dest: "{{ ansible_env.HOME }}/bin/docker-compose"
+    state: link
+    force: yes
+
+- name: Verify docker-compose installation
+  ansible.builtin.command: docker compose version
+  register: compose_version
+  changed_when: false
+
+- name: Display docker-compose version
+  ansible.builtin.debug:
+    msg: "docker-compose installed: {{ compose_version.stdout }}"
+
+- name: Ensure containers root directory exists
+  ansible.builtin.file:
+    path: "{{ containers_remote_directory }}"
+    state: directory
+    owner: "{{ new_users[0].name }}"
+    group: "{{ new_users[0].name }}"
+    mode: '0755'
+  become: yes

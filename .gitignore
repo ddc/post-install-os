@@ -1,0 +1,6 @@
+.idea/
+/dietpi/ansible/roles/finances/files/.env.prod
+/dietpi/ansible/roles/finances/files/certs/
+/dietpi/ansible/roles/discordbot/files/.env.dev
+/dietpi/ansible/roles/discordbot/files/.env.prod
+/docs/

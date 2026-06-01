@@ -1,0 +1,27 @@
+---
+# Only truly global values live here. Role-specific variables live in each
+# role's own vars/main.yml (e.g. roles/openssh/vars/main.yml, roles/network/...).
+
+# Inventory / connection
+dietpi_host: "rpi"
+
+# Playbook-level toggles (referenced directly in playbook.yml tasks)
+auto_reboot: true
+remove_dietpi_user: true
+
+# Shared across many roles
+firewall_enable: true
+new_users:
+  - name: "ddc"
+    password: "dietpi"
+    shell: "/usr/bin/bash"
+    pub_key_location: "~/.ssh/ddc.pub"
+
+# Docker containers (shared by all container roles)
+containers_remote_directory: "/opt/containers"
+containers_clean_on_deploy: []  # List of containers to clean (e.g., ['pihole'] or [] for none)
+
+# SSH port stays global: both the openssh and firewall roles use it, and the
+# firewall role can run (via container tags) without openssh. The remaining SSH
+# options live in roles/openssh/vars/main.yml.
+ssh_port: 22

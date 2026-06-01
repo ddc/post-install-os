@@ -1,0 +1,137 @@
+#!/usr/bin/env bash
+
+#######################################################
+# Exit if not running interactively
+#######################################################
+case $- in
+    *i*) ;;
+    *) return;;
+esac
+
+#######################################################
+# Color setup
+#######################################################
+if command -v dircolors >/dev/null 2>&1; then
+    eval "$(dircolors -b "${HOME}/.dircolors" 2>/dev/null || dircolors -b)"
+    COLOR_FLAG='--color=auto'
+else
+    COLOR_FLAG=''
+fi
+
+#######################################################
+# Custom paths
+#######################################################
+CUSTOMPATHS=.:\
+${HOME}/bin:\
+${HOME}/.local/bin:
+export PATH="$CUSTOMPATHS":"$PATH"
+GPG_TTY=$(tty)
+export GPG_TTY
+
+#######################################################
+# Aliases
+#######################################################
+alias ls='ls ${COLOR_FLAG}'
+alias grep='grep ${COLOR_FLAG}'
+alias fgrep='grep -F ${COLOR_FLAG}'
+alias egrep='egrep ${COLOR_FLAG}'
+alias dir='dir ${COLOR_FLAG}'
+alias vdir='vdir ${COLOR_FLAG}'
+alias l='ls ${COLOR_FLAG} -CF'
+alias la='ls ${COLOR_FLAG} -A'
+alias ll='ls ${COLOR_FLAG} -halF'
+alias lll='ls ${COLOR_FLAG} -hlF'
+alias llr='ls ${COLOR_FLAG} -hltrF'
+alias c='clear'
+alias e='exit'
+alias su-root='switch_user root'
+
+#######################################################
+# Alert alias for long running commands
+#######################################################
+alias alert='notify-send --urgency=low -i "$([ $? = 0 ] && echo terminal || echo error)" "$(history|tail -n1|sed -e '\''s/^\s*[0-9]\+\s*//;s/[;&|]\s*alert$//'\'')"'
+
+#######################################################
+# Git info parser (shell-agnostic)
+#######################################################
+parse_git_info() {
+    git rev-parse --git-dir >/dev/null 2>&1 || return
+
+    branch=$(git symbolic-ref --short HEAD 2>/dev/null)
+    if [ -n "$branch" ]; then
+        rev=$(git rev-parse --short HEAD 2>/dev/null)
+        echo " ($branch${rev:+ [$rev]})"
+    else
+        rev=$(git rev-parse --short HEAD 2>/dev/null)
+        echo " (detached${rev:+ [$rev]})"
+    fi
+}
+
+#######################################################
+# User switching function with SSH agent preservation
+#######################################################
+switch_user() {
+    target_user="$1"
+    if [ -z "$target_user" ]; then
+        echo "Usage: switch_user <username>"
+        return 1
+    fi
+
+    target_shell=$(getent passwd "$target_user" | cut -d: -f7)
+    target_home=$(getent passwd "$target_user" | cut -d: -f6)
+    if [ -z "$target_shell" ]; then
+        target_shell="/bin/sh"
+    fi
+
+    current_ssh_sock="$SSH_AUTH_SOCK"
+    if [ -n "$current_ssh_sock" ]; then
+        echo "Switching to user '$target_user' with SSH agent forwarding..."
+
+        ssh_dir=$(dirname "$current_ssh_sock")
+        sudo chmod 755 "$ssh_dir" 2>/dev/null || true
+        sudo chmod 666 "$current_ssh_sock" 2>/dev/null || true
+
+        # Use sudo without login shell (preserves environment)
+        sudo -E -u "$target_user" "$target_shell" -c "
+            export SSH_AUTH_SOCK='$current_ssh_sock'
+            export HOME='$target_home'
+            cd \"\$HOME\"
+            exec $target_shell
+        "
+    else
+        echo "No SSH agent found, switching without SSH forwarding..."
+        sudo su - "$target_user"
+    fi
+}
+
+#######################################################
+# SSH agent restoration function
+#######################################################
+restore_ssh_agent() {
+    ssh_sock=$(find /tmp -type s -name "agent.*" 2>/dev/null | head -1)
+    if [ -z "$ssh_sock" ]; then
+        ssh_agent_pid=$(pgrep -f ssh-agent | head -1)
+        if [ -n "$ssh_agent_pid" ]; then
+            ssh_sock=$(tr '\0' '\n' < "/proc/$ssh_agent_pid/environ" 2>/dev/null | grep '^SSH_AUTH_SOCK=' | cut -d= -f2)
+        fi
+    fi
+
+    # If still not found, try common locations
+    if [ -z "$ssh_sock" ]; then
+        for sock in /tmp/ssh-*/agent.*; do
+            if [ -S "$sock" ]; then
+                ssh_sock="$sock"
+                break
+            fi
+        done
+    fi
+
+    if [ -n "$ssh_sock" ] && [ -S "$ssh_sock" ]; then
+        export SSH_AUTH_SOCK="$ssh_sock"
+        echo "SSH agent restored: $SSH_AUTH_SOCK"
+        ssh-add -l 2>/dev/null && echo "SSH keys are available" || echo "No SSH keys found"
+    else
+        echo "Could not find SSH agent socket"
+        return 1
+    fi
+}

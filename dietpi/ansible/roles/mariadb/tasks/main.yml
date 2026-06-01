@@ -1,0 +1,85 @@
+---
+# Self-contained mariadb deployment/upgrade role.
+
+- name: Ensure mariadb container directory exists on host
+  ansible.builtin.file:
+    path: "{{ containers_remote_directory }}/mariadb"
+    state: directory
+    owner: "{{ new_users[0].name }}"
+    group: "{{ new_users[0].name }}"
+    mode: '0755'
+  become: yes
+
+- name: Copy mariadb container files
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../containers/mariadb/"
+    dest: "{{ containers_remote_directory }}/mariadb/"
+    owner: "{{ new_users[0].name }}"
+    group: "{{ new_users[0].name }}"
+    mode: '0644'
+    directory_mode: '0755'
+  become: yes
+
+- name: Make update_mariadb.sh executable
+  ansible.builtin.file:
+    path: "{{ containers_remote_directory }}/mariadb/update_mariadb.sh"
+    mode: '0755'
+  become: yes
+
+- name: Check if mariadb container is running
+  ansible.builtin.shell: docker ps --format '{{ "{{" }}.Names{{ "}}" }}' | grep -q '^mariadb$'
+  become_user: "{{ new_users[0].name }}"
+  register: mariadb_running
+  changed_when: false
+  failed_when: false
+
+- name: Start mariadb fresh (first-time install)
+  ansible.builtin.shell: docker compose up -d
+  args:
+    chdir: "{{ containers_remote_directory }}/mariadb"
+  become_user: "{{ new_users[0].name }}"
+  when: mariadb_running.rc != 0
+
+- name: Run update_mariadb.sh (backup + upgrade + prune)
+  ansible.builtin.shell: ./update_mariadb.sh --yes
+  args:
+    chdir: "{{ containers_remote_directory }}/mariadb"
+  become_user: "{{ new_users[0].name }}"
+  when: mariadb_running.rc == 0
+  register: mariadb_update_result
+
+- name: Display mariadb update output
+  ansible.builtin.debug:
+    var: mariadb_update_result.stdout_lines
+  when:
+    - mariadb_update_result is defined
+    - mariadb_update_result.stdout_lines is defined
+
+##### FIREWALL RULES #####
+
+- name: Check if UFW is available (mariadb)
+  ansible.builtin.command: which ufw
+  register: mariadb_ufw_check
+  changed_when: false
+  failed_when: false
+  when: firewall_enable
+
+- name: Read MariaDB .env for port
+  ansible.builtin.shell: |
+    grep 'MARIADB_PORT=' {{ containers_remote_directory }}/mariadb/.env | cut -d '=' -f 2
+  register: mariadb_port
+  changed_when: false
+  failed_when: false
+  when: firewall_enable
+
+- name: Allow MariaDB port through firewall
+  become: yes
+  community.general.ufw:
+    rule: allow
+    port: "{{ mariadb_port.stdout }}"
+    proto: tcp
+    comment: 'MariaDB'
+  when:
+    - firewall_enable
+    - mariadb_ufw_check.rc == 0
+    - mariadb_port.stdout | length > 0

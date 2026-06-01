@@ -1,0 +1,85 @@
+---
+# Self-contained postgres deployment/upgrade role.
+
+- name: Ensure postgres container directory exists on host
+  ansible.builtin.file:
+    path: "{{ containers_remote_directory }}/postgres"
+    state: directory
+    owner: "{{ new_users[0].name }}"
+    group: "{{ new_users[0].name }}"
+    mode: '0755'
+  become: yes
+
+- name: Copy postgres container files
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../containers/postgres/"
+    dest: "{{ containers_remote_directory }}/postgres/"
+    owner: "{{ new_users[0].name }}"
+    group: "{{ new_users[0].name }}"
+    mode: '0644'
+    directory_mode: '0755'
+  become: yes
+
+- name: Make update_postgres.sh executable
+  ansible.builtin.file:
+    path: "{{ containers_remote_directory }}/postgres/update_postgres.sh"
+    mode: '0755'
+  become: yes
+
+- name: Check if postgres container is running
+  ansible.builtin.shell: docker ps --format '{{ "{{" }}.Names{{ "}}" }}' | grep -q '^postgres$'
+  become_user: "{{ new_users[0].name }}"
+  register: postgres_running
+  changed_when: false
+  failed_when: false
+
+- name: Start postgres fresh (first-time install)
+  ansible.builtin.shell: docker compose up -d
+  args:
+    chdir: "{{ containers_remote_directory }}/postgres"
+  become_user: "{{ new_users[0].name }}"
+  when: postgres_running.rc != 0
+
+- name: Run update_postgres.sh (handles version bumps, backups, image cleanup)
+  ansible.builtin.shell: ./update_postgres.sh --yes
+  args:
+    chdir: "{{ containers_remote_directory }}/postgres"
+  become_user: "{{ new_users[0].name }}"
+  when: postgres_running.rc == 0
+  register: postgres_update_result
+
+- name: Display postgres update output
+  ansible.builtin.debug:
+    var: postgres_update_result.stdout_lines
+  when:
+    - postgres_update_result is defined
+    - postgres_update_result.stdout_lines is defined
+
+##### FIREWALL RULES #####
+
+- name: Check if UFW is available (postgres)
+  ansible.builtin.command: which ufw
+  register: postgres_ufw_check
+  changed_when: false
+  failed_when: false
+  when: firewall_enable
+
+- name: Read PostgreSQL .env for port
+  ansible.builtin.shell: |
+    grep 'POSTGRESQL_PORT=' {{ containers_remote_directory }}/postgres/.env | cut -d '=' -f 2
+  register: postgres_port
+  changed_when: false
+  failed_when: false
+  when: firewall_enable
+
+- name: Allow PostgreSQL port through firewall
+  become: yes
+  community.general.ufw:
+    rule: allow
+    port: "{{ postgres_port.stdout }}"
+    proto: tcp
+    comment: 'PostgreSQL'
+  when:
+    - firewall_enable
+    - postgres_ufw_check.rc == 0
+    - postgres_port.stdout | length > 0

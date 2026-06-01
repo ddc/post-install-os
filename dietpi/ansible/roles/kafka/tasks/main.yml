@@ -1,0 +1,85 @@
+---
+# Self-contained kafka deployment/upgrade role.
+
+- name: Ensure kafka container directory exists on host
+  ansible.builtin.file:
+    path: "{{ containers_remote_directory }}/kafka"
+    state: directory
+    owner: "{{ new_users[0].name }}"
+    group: "{{ new_users[0].name }}"
+    mode: '0755'
+  become: yes
+
+- name: Copy kafka container files
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../containers/kafka/"
+    dest: "{{ containers_remote_directory }}/kafka/"
+    owner: "{{ new_users[0].name }}"
+    group: "{{ new_users[0].name }}"
+    mode: '0644'
+    directory_mode: '0755'
+  become: yes
+
+- name: Make update_kafka.sh executable
+  ansible.builtin.file:
+    path: "{{ containers_remote_directory }}/kafka/update_kafka.sh"
+    mode: '0755'
+  become: yes
+
+- name: Check if kafka container is running
+  ansible.builtin.shell: docker ps --format '{{ "{{" }}.Names{{ "}}" }}' | grep -q '^kafka$'
+  become_user: "{{ new_users[0].name }}"
+  register: kafka_running
+  changed_when: false
+  failed_when: false
+
+- name: Start kafka fresh (first-time install)
+  ansible.builtin.shell: docker compose up -d
+  args:
+    chdir: "{{ containers_remote_directory }}/kafka"
+  become_user: "{{ new_users[0].name }}"
+  when: kafka_running.rc != 0
+
+- name: Run update_kafka.sh (pull + restart + prune)
+  ansible.builtin.shell: ./update_kafka.sh
+  args:
+    chdir: "{{ containers_remote_directory }}/kafka"
+  become_user: "{{ new_users[0].name }}"
+  when: kafka_running.rc == 0
+  register: kafka_update_result
+
+- name: Display kafka update output
+  ansible.builtin.debug:
+    var: kafka_update_result.stdout_lines
+  when:
+    - kafka_update_result is defined
+    - kafka_update_result.stdout_lines is defined
+
+##### FIREWALL RULES #####
+
+- name: Check if UFW is available (kafka)
+  ansible.builtin.command: which ufw
+  register: kafka_ufw_check
+  changed_when: false
+  failed_when: false
+  when: firewall_enable
+
+- name: Read Kafka .env for external port
+  ansible.builtin.shell: |
+    grep 'KAFKA_EXTERNAL_PORT=' {{ containers_remote_directory }}/kafka/.env | cut -d '=' -f 2
+  register: kafka_port
+  changed_when: false
+  failed_when: false
+  when: firewall_enable
+
+- name: Allow Kafka external port through firewall
+  become: yes
+  community.general.ufw:
+    rule: allow
+    port: "{{ kafka_port.stdout }}"
+    proto: tcp
+    comment: 'Kafka External'
+  when:
+    - firewall_enable
+    - kafka_ufw_check.rc == 0
+    - kafka_port.stdout | length > 0

@@ -1,0 +1,55 @@
+---
+- name: Install UFW firewall
+  become: yes
+  ansible.builtin.apt:
+    name: ufw
+    state: present
+  when: firewall_enable
+
+- name: Check if UFW is available
+  become: yes
+  ansible.builtin.command: which ufw
+  register: ufw_check
+  ignore_errors: yes
+  changed_when: false
+  when: firewall_enable
+
+##### DEFAULT POLICIES #####
+- name: Set UFW default incoming policy to deny
+  become: yes
+  community.general.ufw:
+    direction: incoming
+    policy: deny
+  when:
+    - firewall_enable
+    - ufw_check.rc == 0
+
+- name: Set UFW default outgoing policy to allow
+  become: yes
+  community.general.ufw:
+    direction: outgoing
+    policy: allow
+  when:
+    - firewall_enable
+    - ufw_check.rc == 0
+
+##### SSH RULES #####
+- name: Allow SSH port through firewall
+  become: yes
+  community.general.ufw:
+    rule: allow
+    port: "{{ ssh_port }}"
+    proto: tcp
+    comment: 'SSH'
+  when:
+    - firewall_enable
+    - ufw_check.rc == 0
+
+##### ENABLE FIREWALL #####
+- name: Enable UFW firewall
+  become: yes
+  community.general.ufw:
+    state: enabled
+  when:
+    - firewall_enable
+    - ufw_check.rc == 0

@@ -1,0 +1,4 @@
+---
+finances_repo_url: "git@github.com:ddc/finances.git"
+finances_install_dir: "{{ containers_remote_directory }}/finances"
+env_type: prod

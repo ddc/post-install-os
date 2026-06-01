@@ -1,0 +1,11 @@
+---
+network_interface: "eth0"
+
+# Static IPv6 configuration
+static_ipv6_enable: true
+static_ipv6_host: "100"
+# Using 100 because it's a server device
+# 1-99 - Network infrastructure (routers, switches)
+# 100-199 - Servers
+# 200-299 - IoT devices
+# 300-399 - Workstations

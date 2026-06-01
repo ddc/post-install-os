@@ -1,0 +1,64 @@
+# Pi-hole Configuration File (TOML format)
+# This file is used by Pi-hole FTL v6.x
+# Documentation: https://docs.pi-hole.net/ftldns/configfile/
+
+[dns]
+# Upstream DNS servers (Quad9 with malware filtering, DNSSEC validation, and ECS)
+upstreams = ["9.9.9.11", "149.112.112.11", "2620:fe::11", "2620:fe::fe:11"]
+dnssec = true
+queryLogging = true
+
+# Interface and listening settings
+listeningMode = "LOCAL"  # Accept queries only from local subnets (recommended)
+domainNeeded = true      # Never forward non-FQDN queries
+expandHosts = true       # Expand hostnames by adding domain to simple names
+replyWhenBusy = "ALLOW"  # Allow queries when gravity DB unavailable (service continuity)
+
+# EDNS Client Subnet (ECS) - Better CDN performance
+EDNS0ECS = true
+
+# Conditional forwarding for local hostname resolution
+revServers = ["true,192.168.1.0/24,192.168.1.1,local"]
+
+[dns.cache]
+# Cache size (default 10000, >10000 may cause performance issues)
+size = 10000
+# Cache optimizer (seconds) - Use stale cache while refreshing from upstream
+optimizer = 3600
+
+[dns.rateLimit]
+# Disable rate limiting (0 = unlimited)
+count = 0
+interval = 0
+
+[dns.blocking]
+# How to reply to blocked queries (NULL = 0.0.0.0/::, RFC compliant, best compatibility)
+mode = "NULL"
+# TTL for blocked queries (2s allows quick response to allowlist changes)
+TTL = 2
+# Add EDNS info-code to blocked replies
+edns = "TEXT"
+
+[database]
+# Database retention (days) - 0 = unlimited
+maxDBdays = 7
+# Database write interval (seconds)
+DBinterval = 60
+# Network table expiration (days)
+network.expire = 365
+
+[webserver]
+# Enable the built-in webserver
+enabled = true
+# Threads set dynamically by Ansible based on CPU cores (Pi-hole default: 50)
+threads = 8
+
+[webserver.api]
+# API sessions limit
+max_sessions = 5
+# Enable pretty JSON output for API responses
+prettyJSON = true
+
+[misc]
+# Privacy settings
+privacyLevel = 0  # Show everything

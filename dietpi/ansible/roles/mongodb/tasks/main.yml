@@ -1,0 +1,85 @@
+---
+# Self-contained mongodb deployment/upgrade role.
+
+- name: Ensure mongodb container directory exists on host
+  ansible.builtin.file:
+    path: "{{ containers_remote_directory }}/mongodb"
+    state: directory
+    owner: "{{ new_users[0].name }}"
+    group: "{{ new_users[0].name }}"
+    mode: '0755'
+  become: yes
+
+- name: Copy mongodb container files
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../containers/mongodb/"
+    dest: "{{ containers_remote_directory }}/mongodb/"
+    owner: "{{ new_users[0].name }}"
+    group: "{{ new_users[0].name }}"
+    mode: '0644'
+    directory_mode: '0755'
+  become: yes
+
+- name: Make update_mongodb.sh executable
+  ansible.builtin.file:
+    path: "{{ containers_remote_directory }}/mongodb/update_mongodb.sh"
+    mode: '0755'
+  become: yes
+
+- name: Check if mongodb container is running
+  ansible.builtin.shell: docker ps --format '{{ "{{" }}.Names{{ "}}" }}' | grep -q '^mongodb$'
+  become_user: "{{ new_users[0].name }}"
+  register: mongodb_running
+  changed_when: false
+  failed_when: false
+
+- name: Start mongodb fresh (first-time install)
+  ansible.builtin.shell: docker compose up -d
+  args:
+    chdir: "{{ containers_remote_directory }}/mongodb"
+  become_user: "{{ new_users[0].name }}"
+  when: mongodb_running.rc != 0
+
+- name: Run update_mongodb.sh (backup + upgrade + prune)
+  ansible.builtin.shell: ./update_mongodb.sh --yes
+  args:
+    chdir: "{{ containers_remote_directory }}/mongodb"
+  become_user: "{{ new_users[0].name }}"
+  when: mongodb_running.rc == 0
+  register: mongodb_update_result
+
+- name: Display mongodb update output
+  ansible.builtin.debug:
+    var: mongodb_update_result.stdout_lines
+  when:
+    - mongodb_update_result is defined
+    - mongodb_update_result.stdout_lines is defined
+
+##### FIREWALL RULES #####
+
+- name: Check if UFW is available (mongodb)
+  ansible.builtin.command: which ufw
+  register: mongodb_ufw_check
+  changed_when: false
+  failed_when: false
+  when: firewall_enable
+
+- name: Read MongoDB .env for port
+  ansible.builtin.shell: |
+    grep 'MONGODB_PORT=' {{ containers_remote_directory }}/mongodb/.env | cut -d '=' -f 2
+  register: mongodb_port
+  changed_when: false
+  failed_when: false
+  when: firewall_enable
+
+- name: Allow MongoDB port through firewall
+  become: yes
+  community.general.ufw:
+    rule: allow
+    port: "{{ mongodb_port.stdout }}"
+    proto: tcp
+    comment: 'MongoDB'
+  when:
+    - firewall_enable
+    - mongodb_ufw_check.rc == 0
+    - mongodb_port.stdout | length > 0

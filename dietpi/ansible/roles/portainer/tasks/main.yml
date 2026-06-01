@@ -1,0 +1,105 @@
+---
+# Self-contained portainer deployment/upgrade role.
+
+- name: Ensure portainer container directory exists on host
+  ansible.builtin.file:
+    path: "{{ containers_remote_directory }}/portainer"
+    state: directory
+    owner: "{{ new_users[0].name }}"
+    group: "{{ new_users[0].name }}"
+    mode: '0755'
+  become: yes
+
+- name: Copy portainer container files
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../containers/portainer/"
+    dest: "{{ containers_remote_directory }}/portainer/"
+    owner: "{{ new_users[0].name }}"
+    group: "{{ new_users[0].name }}"
+    mode: '0644'
+    directory_mode: '0755'
+  become: yes
+
+- name: Make update_portainer.sh executable
+  ansible.builtin.file:
+    path: "{{ containers_remote_directory }}/portainer/update_portainer.sh"
+    mode: '0755'
+  become: yes
+
+- name: Check if portainer container is running
+  ansible.builtin.shell: docker ps --format '{{ "{{" }}.Names{{ "}}" }}' | grep -q '^portainer$'
+  become_user: "{{ new_users[0].name }}"
+  register: portainer_running
+  changed_when: false
+  failed_when: false
+
+- name: Start portainer fresh (first-time install)
+  ansible.builtin.shell: docker compose up -d
+  args:
+    chdir: "{{ containers_remote_directory }}/portainer"
+  become_user: "{{ new_users[0].name }}"
+  when: portainer_running.rc != 0
+
+- name: Run update_portainer.sh (pull + restart + prune)
+  ansible.builtin.shell: ./update_portainer.sh
+  args:
+    chdir: "{{ containers_remote_directory }}/portainer"
+  become_user: "{{ new_users[0].name }}"
+  when: portainer_running.rc == 0
+  register: portainer_update_result
+
+- name: Display portainer update output
+  ansible.builtin.debug:
+    var: portainer_update_result.stdout_lines
+  when:
+    - portainer_update_result is defined
+    - portainer_update_result.stdout_lines is defined
+
+##### FIREWALL RULES #####
+
+- name: Check if UFW is available (portainer)
+  ansible.builtin.command: which ufw
+  register: portainer_ufw_check
+  changed_when: false
+  failed_when: false
+  when: firewall_enable
+
+- name: Read Portainer .env for web port
+  ansible.builtin.shell: |
+    grep 'PORTAINER_WEB_PORT=' {{ containers_remote_directory }}/portainer/.env | cut -d '=' -f 2
+  register: portainer_web_port
+  changed_when: false
+  failed_when: false
+  when: firewall_enable
+
+- name: Read Portainer .env for edge port
+  ansible.builtin.shell: |
+    grep 'PORTAINER_EDGE_PORT=' {{ containers_remote_directory }}/portainer/.env | cut -d '=' -f 2
+  register: portainer_edge_port
+  changed_when: false
+  failed_when: false
+  when: firewall_enable
+
+- name: Allow Portainer web port through firewall
+  become: yes
+  community.general.ufw:
+    rule: allow
+    port: "{{ portainer_web_port.stdout }}"
+    proto: tcp
+    comment: 'Portainer Web'
+  when:
+    - firewall_enable
+    - portainer_ufw_check.rc == 0
+    - portainer_web_port.stdout | length > 0
+
+- name: Allow Portainer edge port through firewall
+  become: yes
+  community.general.ufw:
+    rule: allow
+    port: "{{ portainer_edge_port.stdout }}"
+    proto: tcp
+    comment: 'Portainer Edge'
+  when:
+    - firewall_enable
+    - portainer_ufw_check.rc == 0
+    - portainer_edge_port.stdout | length > 0
