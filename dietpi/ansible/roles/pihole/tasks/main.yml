@@ -19,6 +19,30 @@
     state: present
   delegate_to: localhost
 
+# The container rewrites the bind-mounted pihole.toml and chowns it to its
+# internal 'pihole' user. Map that user to the host ansible user's UID/GID so the
+# file stays owned by that user instead of the image default (1000).
+- name: Look up UID/GID of the container user on the host
+  ansible.builtin.getent:
+    database: passwd
+    key: "{{ new_users[0].name }}"
+
+- name: Set PIHOLE_UID in .env to the ansible user's UID
+  ansible.builtin.lineinfile:
+    path: "{{ playbook_dir }}/../containers/pihole/.env"
+    regexp: '^PIHOLE_UID='
+    line: "PIHOLE_UID={{ getent_passwd[new_users[0].name][1] }}"
+    state: present
+  delegate_to: localhost
+
+- name: Set PIHOLE_GID in .env to the ansible user's GID
+  ansible.builtin.lineinfile:
+    path: "{{ playbook_dir }}/../containers/pihole/.env"
+    regexp: '^PIHOLE_GID='
+    line: "PIHOLE_GID={{ getent_passwd[new_users[0].name][2] }}"
+    state: present
+  delegate_to: localhost
+
 ##### HOST DNS CONFIG #####
 
 - name: Check if resolvconf is installed
@@ -143,8 +167,12 @@
   changed_when: false
   failed_when: false
 
-- name: Start pihole fresh (first-time install)
-  ansible.builtin.shell: docker compose up -d
+- name: Start pihole fresh (first-time install, seed pihole.toml into the volume)
+  ansible.builtin.shell: |
+    set -e
+    docker compose up --no-start
+    docker cp pihole.toml pihole:/etc/pihole/pihole.toml
+    docker compose start
   args:
     chdir: "{{ containers_remote_directory }}/pihole"
   become_user: "{{ new_users[0].name }}"

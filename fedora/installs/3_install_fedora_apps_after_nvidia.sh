@@ -290,6 +290,7 @@ function install_flatpak_apps {
     return 0
 }
 #############################################################################
+## gp-saml-gui
 function install_uv_apps {
     log_action "INSTALLING UV apps for local user"
     local list_uv="nvibrant, aws-sso-util, awsume, cprofilev, black, ruff, poetry, pre-commit,
@@ -1259,7 +1260,7 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
         #install_rpmfusion_virtualbox
         #install_qemu_kvm
         #install_teamviewer
-        #install_globalprotect_openconnect
+        install_globalprotect_openconnect
         #install_ddcutil
         #install_droidcam_client
         install_coolercontrol

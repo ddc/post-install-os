@@ -46,6 +46,25 @@
   ansible.builtin.apt:
     autoremove: yes
 
+- name: Pin DietPi NTP mirror to IPs (survives DietPi updates)
+  become: yes
+  ansible.builtin.lineinfile:
+    path: /boot/dietpi.txt
+    regexp: '^CONFIG_NTP_MIRROR='
+    line: "CONFIG_NTP_MIRROR={{ ntp_servers }} {{ ntp_fallback_servers }}"
+  when: dietpi_update_script.stat.exists
+
+- name: Configure systemd-timesyncd with IP-pinned NTP servers
+  become: yes
+  ansible.builtin.copy:
+    dest: /etc/systemd/timesyncd.conf
+    mode: '0644'
+    content: |
+      [Time]
+      NTP={{ ntp_servers }}
+      FallbackNTP={{ ntp_fallback_servers }}
+  notify: Restart systemd-timesyncd
+
 - name: Enable and start NTP time synchronization
   ansible.builtin.systemd:
     name: systemd-timesyncd

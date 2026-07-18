@@ -14,6 +14,8 @@ services:
       TZ: ${TZ}
       FTLCONF_webserver_api_password: ${WEBPASSWORD}
       FTLCONF_webserver_port: ${WEBPORT}
+      PIHOLE_UID: ${PIHOLE_UID}
+      PIHOLE_GID: ${PIHOLE_GID}
     logging:
       driver: "json-file"
       options:
@@ -22,7 +24,7 @@ services:
     volumes:
       - pihole_data:/etc/pihole
       - dnsmasq_data:/etc/dnsmasq.d
-      - ./pihole.toml:/etc/pihole/pihole.toml
+      # - ./pihole.toml:/etc/pihole/pihole.toml
     healthcheck:
       test: ["CMD-SHELL", "pgrep pihole-FTL && nc -z 127.0.0.1 53 || exit 1"]
       interval: 30s
