@@ -1,6 +1,6 @@
 services:
   mongodb:
-    image: mongo:8.0
+    image: mongo:8.2
     container_name: mongodb
     hostname: mongodb
     restart: always
@@ -26,8 +26,8 @@ services:
     networks:
       - mongodb_network
     healthcheck:
-      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
-      interval: 10s
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
+      interval: 60s
       timeout: 10s
       retries: 5
       start_period: 30s

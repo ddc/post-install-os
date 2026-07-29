@@ -4,6 +4,7 @@ services:
     container_name: postgres
     hostname: postgres
     restart: always
+    init: true
     env_file: .env
     logging:
       driver: "json-file"
@@ -33,7 +34,7 @@ services:
       "
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRESQL_USER} -d ${POSTGRESQL_DATABASE}"]
-      interval: 10s
+      interval: 30s
       timeout: 10s
       retries: 5
       start_period: 30s

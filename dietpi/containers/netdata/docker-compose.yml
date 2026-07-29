@@ -4,6 +4,7 @@ services:
     container_name: netdata
     hostname: netdata
     restart: always
+    init: true
     env_file: .env
     logging:
       driver: "json-file"

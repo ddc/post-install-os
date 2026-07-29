@@ -4,6 +4,7 @@ services:
     container_name: kafka
     hostname: kafka
     restart: always
+    init: true
     env_file: .env
     logging:
       driver: "json-file"
@@ -49,7 +50,7 @@ services:
     networks:
       - kafka_network
     healthcheck:
-      test: ["CMD-SHELL", "timeout 5 bash -c '</dev/tcp/localhost/${KAFKA_INTERNAL_PORT}' || exit 1"]
+      test: ["CMD", "bash", "-c", "</dev/tcp/localhost/${KAFKA_INTERNAL_PORT}"]
       interval: 30s
       timeout: 10s
       retries: 5
