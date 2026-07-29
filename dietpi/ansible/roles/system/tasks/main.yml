@@ -137,6 +137,27 @@
   ansible.builtin.command: hostname {{ hostname }}
   changed_when: true
 
+- name: Check if Raspberry Pi firmware config exists
+  become: yes
+  ansible.builtin.stat:
+    path: /boot/firmware/config.txt
+  register: rpi_firmware_config
+
+- name: Configure cooling fan curve in /boot/firmware/config.txt
+  become: yes
+  ansible.builtin.blockinfile:
+    path: /boot/firmware/config.txt
+    block: |
+      #-------Cooling Fan-----
+      dtparam=cooling_fan=on
+      dtparam=fan_temp0=40000 dtparam=fan_temp0_hyst=5000 dtparam=fan_temp0_speed=100
+      dtparam=fan_temp1=50000 dtparam=fan_temp1_hyst=5000 dtparam=fan_temp1_speed=150
+      dtparam=fan_temp2=60000 dtparam=fan_temp2_hyst=5000 dtparam=fan_temp2_speed=200
+      dtparam=fan_temp3=70000 dtparam=fan_temp3_hyst=5000 dtparam=fan_temp3_speed=255
+    marker: "# {mark} ANSIBLE MANAGED - Cooling Fan"
+    create: no
+  when: rpi_firmware_config.stat.exists
+
 #- name: Check if poetry is installed
 #  ansible.builtin.command: which poetry
 #  register: poetry_check
