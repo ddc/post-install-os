@@ -38,6 +38,7 @@
     owner: "65534"
     group: "65534"
     mode: '0755'
+    recurse: yes
   become: yes
 
 - name: Test SSH connectivity to GitHub
@@ -76,6 +77,7 @@
     owner: "{{ new_users[0].name }}"
     group: "{{ new_users[0].name }}"
     recurse: yes
+    follow: no  # don't dereference the `logs` symlink; /var/log/discordbot must stay owned by uid 65534
   become: yes
 
 - name: Upload .env file ({{ env_type }})
