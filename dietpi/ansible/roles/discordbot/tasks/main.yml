@@ -31,12 +31,12 @@
     mode: '0755'
   become: yes
 
-- name: Create discordbot logs directory (owned by uid 1000 = container botuser)
+- name: Create discordbot logs directory (owned by uid 65534 = container user, matches Dockerfile USER)
   ansible.builtin.file:
     path: "{{ logs_location }}"
     state: directory
-    owner: "1000"
-    group: "1000"
+    owner: "65534"
+    group: "65534"
     mode: '0755'
   become: yes
 
