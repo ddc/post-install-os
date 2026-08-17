@@ -63,6 +63,14 @@
     state: absent
   become: yes
 
+- name: Set ownership of cloned repository
+  ansible.builtin.file:
+    path: "{{ project_location }}"
+    owner: "{{ new_users[0].name }}"
+    group: "{{ new_users[0].name }}"
+    recurse: yes
+  become: yes
+
 - name: Symlink logs directory to centralized location
   ansible.builtin.file:
     src: "{{ logs_location }}"
@@ -70,15 +78,6 @@
     state: link
     force: yes
   become_user: "{{ new_users[0].name }}"
-
-- name: Set ownership of cloned repository
-  ansible.builtin.file:
-    path: "{{ project_location }}"
-    owner: "{{ new_users[0].name }}"
-    group: "{{ new_users[0].name }}"
-    recurse: yes
-    follow: no  # don't dereference the `logs` symlink; /var/log/discordbot must stay owned by uid 65534
-  become: yes
 
 - name: Upload .env file ({{ env_type }})
   ansible.builtin.copy:
@@ -103,6 +102,25 @@
     - start.sh
     - stop.sh
     - update.sh
+
+# start.sh chowns the logs dir to uid 1000, but the container runs as USER 65534
+# (Dockerfile). Rewrite the uid so start.sh doesn't revert the logs ownership right
+# before the container starts. Defensive; no-op once upstream start.sh is fixed.
+- name: Patch utilities/start.sh logs chown to container uid 65534
+  ansible.builtin.replace:
+    path: "{{ project_location }}/utilities/start.sh"
+    regexp: '1000:1000'
+    replace: '65534:65534'
+
+- name: Enforce logs directory ownership for container user (uid 65534)
+  ansible.builtin.file:
+    path: "{{ logs_location }}"
+    state: directory
+    owner: "65534"
+    group: "65534"
+    mode: '0755'
+    recurse: yes
+  become: yes
 
 - name: Wait for postgres container to be healthy
   ansible.builtin.shell: docker inspect --format='{% raw %}{{.State.Health.Status}}{% endraw %}' postgres
