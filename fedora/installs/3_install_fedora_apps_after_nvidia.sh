@@ -1007,6 +1007,9 @@ net.ipv4.tcp_window_scaling = 1
 net.ipv4.tcp_timestamps = 1
 net.ipv4.tcp_sack = 1
 net.ipv4.tcp_fastopen = 3
+
+## Set Yama security to restricted
+kernel.yama.ptrace_scope = 1
 EOF
     sudo sysctl -p /etc/sysctl.d/60-custom.conf
     return 0
