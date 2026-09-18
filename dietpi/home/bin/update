@@ -61,12 +61,26 @@ function update_debian {
     sudo apt-get clean
 }
 #############################################################################
+# An upgrade can restart docker/networking; wait for DNS before dietpi-update
+# (it downloads its patches from GitHub and fails hard on a lookup error).
+function wait_for_dns {
+    local host="raw.githubusercontent.com"
+    local timeout=60
+    for ((i = 0; i < timeout; i += 2)); do
+        getent hosts "$host" >/dev/null && return 0
+        sleep 2
+    done
+    log_error "DNS not resolving $host after ${timeout}s (check /etc/resolv.conf)"
+    return 1
+}
+#############################################################################
 log_info "Distribution: $DISTRO ($DISTRO_VERSION)"
 log_info "Architecture: $ARCH"
 echo
 case $DISTRO in
     raspberrypi|debian|ubuntu|mint)
         update_debian
+        wait_for_dns
         sudo /boot/dietpi/dietpi-update
         ;;
     *)

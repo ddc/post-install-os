@@ -47,9 +47,8 @@ echo
 case $DISTRO in
     raspberrypi|debian|ubuntu|mint)
         log_action "Updating Docker Containers..."
-        # The host resolves DNS through the Pi-hole container, so update it
-        # LAST: restarting Pi-hole mid-run takes DNS offline and breaks image
-        # pulls (registry lookups) for any containers processed after it.
+        # Update Pi-hole LAST: restarting it takes LAN DNS offline, so keep
+        # that window short and after every other image pull has finished.
         update_dirs=()
         for dir in /opt/containers/*/; do
             [ "$(basename "$dir")" = "pihole" ] || update_dirs+=("$dir")

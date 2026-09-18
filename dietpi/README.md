@@ -81,7 +81,7 @@ on subsequent runs it invokes the container's `update_<name>.sh` script
 (backup → pull → restart → prune old images).
 
 - `docker` - Install Docker engine + docker-compose plugin only
-- `pihole` - Deploy / update Pi-hole (includes DNS config, sqlite3, blocklists, db maintenance)
+- `pihole` - Deploy / update Pi-hole (includes sqlite3, blocklists, db maintenance)
 - `postgres` - Deploy / update PostgreSQL (handles major version upgrades safely)
 - `mariadb` - Deploy / update MariaDB (with pre-upgrade backup)
 - `mongodb` - Deploy / update MongoDB (blocks non-sequential major upgrades)
@@ -111,7 +111,8 @@ on subsequent runs it invokes the container's `update_<name>.sh` script
 | Order | Role        | Purpose                          | Dependencies                      |
 |-------|-------------|----------------------------------|-----------------------------------|
 | 1     | network     | Network configuration            | None                              |
-|       |             | • Install NetworkManager         |                                   |
+|       |             | • Static IPv4 (no DHCP client)   |                                   |
+|       |             | • Host DNS → upstream resolvers  |                                   |
 |       |             | • Configure static IPv6          |                                   |
 | 2     | system      | Base system setup                | network                           |
 |       |             | • Update package cache & upgrade |                                   |
@@ -139,8 +140,8 @@ on subsequent runs it invokes the container's `update_<name>.sh` script
 |       |             | • Upload compose + scripts       |                                   |
 |       |             | • Start fresh or run update_*.sh |                                   |
 |       |             | • Add own UFW port rules         |                                   |
-|       |             | • pihole: also does DNS config,  |                                   |
-|       |             |   sqlite3, blocklists, db prune  |                                   |
+|       |             | • pihole: also does sqlite3,     |                                   |
+|       |             |   blocklists, db prune           |                                   |
 |       |             | • (pihole, postgres, mariadb,    |                                   |
 |       |             |   mongodb, kafka, netdata,       |                                   |
 |       |             |   portainer, finances)           |                                   |
@@ -202,7 +203,7 @@ ansible-playbook -i inventory.yml playbook.yml --tags pihole -e 'containers_clea
 ```
 
 ### Other Settings
-- Network configuration (IPv6, DNS)
+- Network configuration (static IPv4/IPv6, host DNS)
 - User accounts and SSH keys
 - SSH port and security settings
 - Firewall rules

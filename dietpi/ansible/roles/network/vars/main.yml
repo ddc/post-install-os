@@ -1,6 +1,23 @@
 ---
 network_interface: "eth0"
 
+# Static IPv4 configuration (/etc/network/interfaces).
+# The Pi is the LAN's DNS server (Pi-hole), so it must not depend on DHCP:
+# the router's DHCP hands out the Pi-hole as DNS, and udhcpc would rewrite
+# /etc/resolv.conf to point the host at its own Pi-hole container -> any
+# Docker restart (apt upgrade, dietpi-update) takes host DNS offline.
+static_ipv4_address: "192.168.1.100"
+static_ipv4_netmask: "255.255.255.0"
+static_ipv4_gateway: "192.168.1.1"
+
+# Host DNS (/etc/resolv.conf). Upstream resolvers, never the local Pi-hole,
+# to avoid a DNS loop. glibc only uses the first 3 nameservers.
+# Quad9 with malware filtering (primary + secondary), Cloudflare fallback.
+host_dns_servers:
+  - "9.9.9.11"
+  - "149.112.112.11"
+  - "1.1.1.1"
+
 # Static IPv6 configuration
 static_ipv6_enable: true
 static_ipv6_host: "100"

@@ -1,4 +1,69 @@
 ---
+##### STATIC IPv4 + HOST DNS #####
+
+# Same layout dietpi-config writes, so the file stays editable from dietpi-config.
+# Switching to static stops udhcpc (and its resolv.conf rewrites) from next boot.
+- name: Configure static IPv4 in /etc/network/interfaces
+  ansible.builtin.copy:
+    content: |
+      # Location: /etc/network/interfaces
+      # Please modify network settings via: dietpi-config
+      # Or create your own drop-ins in: /etc/network/interfaces.d/
+
+      # Drop-in configs
+      source interfaces.d/*
+
+      # Ethernet
+      allow-hotplug {{ network_interface }}
+      iface {{ network_interface }} inet static
+      address {{ static_ipv4_address }}
+      netmask {{ static_ipv4_netmask }}
+      gateway {{ static_ipv4_gateway }}
+      #dns-nameservers {{ host_dns_servers | join(' ') }}
+
+      # WiFi
+      #allow-hotplug wlan0
+      iface wlan0 inet dhcp
+      address {{ static_ipv4_address }}
+      netmask {{ static_ipv4_netmask }}
+      gateway {{ static_ipv4_gateway }}
+      #dns-nameservers {{ host_dns_servers | join(' ') }}
+      wireless-power off
+      wpa-conf /etc/wpa_supplicant/wpa_supplicant.conf
+    dest: /etc/network/interfaces
+    owner: root
+    group: root
+    mode: '0644'
+    backup: yes
+  become: yes
+  register: interfaces_result
+
+- name: Configure host DNS in /etc/resolv.conf
+  ansible.builtin.copy:
+    content: |
+      # ANSIBLE MANAGED - upstream DNS only (never the local Pi-hole, avoids a DNS loop)
+      {% for server in host_dns_servers %}
+      nameserver {{ server }}
+      {% endfor %}
+    dest: /etc/resolv.conf
+    owner: root
+    group: root
+    mode: '0644'
+  become: yes
+
+# Apply now without bouncing the interface (keeps the SSH session alive): the IP
+# is unchanged, and udhcpc exits on SIGTERM without releasing the lease (no -R),
+# so the address stays. It just stops rewriting resolv.conf on lease renewal.
+- name: Stop udhcpc on {{ network_interface }} (static config takes over)
+  ansible.builtin.command: pkill -f "udhcpc .*-i {{ network_interface }}"
+  become: yes
+  register: udhcpc_kill
+  changed_when: udhcpc_kill.rc == 0
+  failed_when: udhcpc_kill.rc > 1
+  when: interfaces_result.changed
+
+##### STATIC IPv6 #####
+
 - name: Detect current IPv6 SLAAC address
   ansible.builtin.shell: "ip -6 addr show {{ network_interface }} | grep 'scope global dynamic' | awk '{print $2}' | head -1"
   register: slaac_address
