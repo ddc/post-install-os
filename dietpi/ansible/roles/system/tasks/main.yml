@@ -54,6 +54,31 @@
     line: "CONFIG_NTP_MIRROR={{ ntp_servers }} {{ ntp_fallback_servers }}"
   when: dietpi_update_script.stat.exists
 
+- name: Pin DietPi time sync mode to daemon (survives DietPi updates)
+  become: yes
+  ansible.builtin.lineinfile:
+    path: /boot/dietpi.txt
+    regexp: '^CONFIG_NTP_MODE='
+    line: "CONFIG_NTP_MODE={{ ntp_mode }}"
+  when: dietpi_update_script.stat.exists
+  register: ntp_mode_pin
+
+- name: Check if DietPi time sync helper exists
+  become: yes
+  ansible.builtin.stat:
+    path: /boot/dietpi/func/run_ntpd
+  register: dietpi_ntpd_helper
+
+# DietPi owns the timesyncd drop-ins: let its own helper re-apply them from the
+# new CONFIG_NTP_MODE instead of fighting it with systemctl on every run.
+- name: Apply DietPi time sync mode
+  become: yes
+  ansible.builtin.command: /boot/dietpi/func/run_ntpd 1
+  when:
+    - ntp_mode_pin is changed
+    - dietpi_ntpd_helper.stat.exists
+  changed_when: true
+
 - name: Configure systemd-timesyncd with IP-pinned NTP servers
   become: yes
   ansible.builtin.copy:
@@ -65,16 +90,55 @@
       FallbackNTP={{ ntp_fallback_servers }}
   notify: Restart systemd-timesyncd
 
+- name: Flush handlers so timesyncd restarts before the sync check
+  ansible.builtin.meta: flush_handlers
+
 - name: Enable and start NTP time synchronization
+  become: yes
   ansible.builtin.systemd:
     name: systemd-timesyncd
     enabled: true
     state: started
 
 - name: Ensure NTP sync is active
+  become: yes
   ansible.builtin.command:
     cmd: timedatectl set-ntp true
   changed_when: false
+
+# A silently unsynchronized clock is what broke DNSSEC, so surface it here
+# rather than letting it sit until queries start failing.
+- name: Wait for the clock to synchronize
+  become: yes
+  ansible.builtin.command: timedatectl show --property=NTPSynchronized --value
+  register: ntp_synchronized
+  until: ntp_synchronized.stdout == "yes"
+  retries: 10
+  delay: 3
+  changed_when: false
+  failed_when: false
+
+- name: Warn when the clock is still not synchronized
+  ansible.builtin.debug:
+    msg: >-
+      WARNING: clock is NOT NTP-synchronized (NTPSynchronized={{ ntp_synchronized.stdout }}).
+      Pi-hole will mark DNSSEC answers BOGUS while the clock is skewed.
+      Check: systemctl status systemd-timesyncd && timedatectl show-timesync
+  when: ntp_synchronized.stdout != "yes"
+
+# Backstop: timesyncd can give up (e.g. no network at boot after a power cut)
+# and mode 4 alone will not retry forever. Re-arm it every 15 min; a no-op when
+# the clock is already synchronized.
+- name: Create cron job to re-arm NTP sync when the clock drifts unsynchronized
+  become: yes
+  ansible.builtin.cron:
+    name: "Re-arm NTP sync when unsynchronized"
+    minute: "*/15"
+    user: root
+    job: >-
+      [ "$(timedatectl show --property=NTPSynchronized --value)" = yes ]
+      || systemctl restart systemd-timesyncd
+    cron_file: ntp-sync-watchdog
 
 - name: Check if swap file exists
   become: yes

@@ -63,6 +63,31 @@ function update_debian {
 #############################################################################
 # An upgrade can restart docker/networking; wait for DNS before dietpi-update
 # (it downloads its patches from GitHub and fails hard on a lookup error).
+# A skewed clock makes DNSSEC RRSIG validity windows fail, so Pi-hole answers
+# BOGUS for zones with short-lived signatures and name resolution half-breaks.
+# Cheap to check here, and the cause is never obvious from the symptom.
+function check_clock_synced {
+    local synced
+    synced=$(timedatectl show --property=NTPSynchronized --value 2>/dev/null || echo "unknown")
+    if [[ "$synced" == "yes" ]]; then
+        log_success "Clock is NTP-synchronized"
+        return 0
+    fi
+
+    log_warn "Clock is NOT NTP-synchronized (NTPSynchronized=${synced})"
+    log_action "Restarting systemd-timesyncd..."
+    sudo systemctl restart systemd-timesyncd || true
+    sleep 5
+
+    synced=$(timedatectl show --property=NTPSynchronized --value 2>/dev/null || echo "unknown")
+    if [[ "$synced" == "yes" ]]; then
+        log_success "Clock synchronized"
+    else
+        log_warn "Clock still unsynchronized - DNSSEC answers may come back BOGUS"
+        log_info "Check: grep CONFIG_NTP_MODE /boot/dietpi.txt (want 4), timedatectl show-timesync"
+    fi
+}
+#############################################################################
 function wait_for_dns {
     local host="raw.githubusercontent.com"
     local timeout=60
@@ -80,6 +105,7 @@ echo
 case $DISTRO in
     raspberrypi|debian|ubuntu|mint)
         update_debian
+        check_clock_synced
         wait_for_dns
         sudo /boot/dietpi/dietpi-update
         ;;

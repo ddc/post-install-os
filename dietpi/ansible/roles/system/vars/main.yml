@@ -9,6 +9,17 @@ hostname: "DietPi"
 ntp_servers: "162.159.200.1 162.159.200.123"
 ntp_fallback_servers: "216.239.35.0 216.239.35.4"
 
+# DietPi time sync mode (/boot/dietpi.txt CONFIG_NTP_MODE):
+#   1 = boot only, 2 = boot + daily, 3 = boot + hourly, 4 = daemon + drift
+# Mode 4 keeps systemd-timesyncd running instead of firing one-shot attempts.
+# Modes 1-3 leave the clock uncorrected whenever that single attempt fails, and
+# with no RTC battery the Pi boots with a stale saved timestamp -> hours of skew
+# -> DNSSEC RRSIG inception times look like the future -> BOGUS for every zone
+# signed with a short validity window (CDN live-signing). Mode 2 did exactly
+# that on 2026-10-22: the clock ran 63 min slow and Pi-hole marked valid
+# domains BOGUS.
+ntp_mode: 4
+
 # Initial installation packages
 install_packages:
   - vim
@@ -16,3 +27,4 @@ install_packages:
   - nmap
   - btop
   - zstd
+  - bind9-dnsutils
