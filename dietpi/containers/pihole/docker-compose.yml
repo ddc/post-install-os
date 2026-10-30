@@ -12,6 +12,7 @@ services:
     shm_size: "512m"
     environment:
       TZ: ${TZ}
+      FTLCONF_misc_dnsmasq_lines: 'dns-forward-max=500'
       FTLCONF_webserver_api_password: ${WEBPASSWORD}
       FTLCONF_webserver_port: ${WEBPORT}
       PIHOLE_UID: ${PIHOLE_UID}
