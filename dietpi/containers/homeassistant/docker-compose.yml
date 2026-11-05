@@ -1,0 +1,33 @@
+---
+services:
+  homeassistant:
+    image: ghcr.io/home-assistant/home-assistant:stable
+    container_name: homeassistant
+    hostname: homeassistant
+    restart: always
+    env_file: .env
+    network_mode: host
+    environment:
+      TZ: ${TZ}
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    volumes:
+      - homeassistant_config:/config
+      - /etc/localtime:/etc/localtime:ro
+      # Bluetooth (BLE sensors)
+      # - /run/dbus:/run/dbus:ro
+    # devices:
+    #   - "${ZIGBEE_DEVICE}:/dev/ttyUSB0"
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:${HA_PORT}/manifest.json')"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 300s
+
+volumes:
+  homeassistant_config:
+    name: homeassistant_config

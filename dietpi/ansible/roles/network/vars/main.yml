@@ -10,13 +10,8 @@ static_ipv4_address: "192.168.1.100"
 static_ipv4_netmask: "255.255.255.0"
 static_ipv4_gateway: "192.168.1.1"
 
-# Host DNS (/etc/resolv.conf). Upstream resolvers, never the local Pi-hole,
-# to avoid a DNS loop. glibc only uses the first 3 nameservers.
-# Quad9 with malware filtering (primary + secondary), Cloudflare fallback.
-host_dns_servers:
-  - "9.9.9.11"
-  - "149.112.112.11"
-  - "1.1.1.1"
+# Host DNS (/etc/resolv.conf) comes from dns_servers_plain in
+# group_vars/all.yml, shared with the dnsproxy container's bootstrap resolver.
 
 # Static IPv6 configuration
 static_ipv6_enable: true

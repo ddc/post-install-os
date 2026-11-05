@@ -1,6 +1,6 @@
 services:
   kafka:
-    image: docker.io/confluentinc/cp-kafka:8.2.0
+    image: docker.io/confluentinc/cp-kafka:latest
     container_name: kafka
     hostname: kafka
     restart: always

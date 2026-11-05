@@ -81,13 +81,15 @@ on subsequent runs it invokes the container's `update_<name>.sh` script
 (backup → pull → restart → prune old images).
 
 - `docker` - Install Docker engine + docker-compose plugin only
-- `pihole` - Deploy / update Pi-hole (includes sqlite3, blocklists, db maintenance)
+- `dnsproxy` - Deploy / update the DNS-over-HTTPS proxy (Pi-hole's encrypted upstream)
+- `pihole` - Deploy / update Pi-hole (includes sqlite3, blocklists, db maintenance; pulls in `dnsproxy`)
 - `postgres` - Deploy / update PostgreSQL (handles major version upgrades safely)
 - `mariadb` - Deploy / update MariaDB (with pre-upgrade backup)
 - `mongodb` - Deploy / update MongoDB (blocks non-sequential major upgrades)
 - `kafka` - Deploy / update Kafka
 - `netdata` - Deploy / update Netdata
 - `portainer` - Deploy / update Portainer
+- `homeassistant` - Deploy / update Home Assistant
 - `finances` - Deploy / update Finances app
 
 **Note**: All container tags auto-include the `docker` role (idempotent — only installs Docker if it's not already present).
@@ -141,7 +143,10 @@ on subsequent runs it invokes the container's `update_<name>.sh` script
 |       |             | • Start fresh or run update_*.sh |                                   |
 |       |             | • Add own UFW port rules         |                                   |
 |       |             | • pihole: also does sqlite3,     |                                   |
-|       |             |   blocklists, db prune           |                                   |
+|       |             |   blocklists, db prune, and      |                                   |
+|       |             |   points upstream at dnsproxy    |                                   |
+|       |             | • dnsproxy: DoH upstream, runs   |                                   |
+|       |             |   before pihole (loopback only)  |                                   |
 |       |             | • (pihole, postgres, mariadb,    |                                   |
 |       |             |   mongodb, kafka, netdata,       |                                   |
 |       |             |   portainer, finances)           |                                   |
@@ -204,6 +209,7 @@ ansible-playbook -i inventory.yml playbook.yml --tags pihole -e 'containers_clea
 
 ### Other Settings
 - Network configuration (static IPv4/IPv6, host DNS)
+- DNS upstreams, plaintext + DoH (`dns_servers_plain`, `dns_doh_upstreams` in `group_vars/all.yml`)
 - User accounts and SSH keys
 - SSH port and security settings
 - Firewall rules

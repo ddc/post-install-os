@@ -275,10 +275,15 @@ function hide_grub_uefi_firmware_entry {
     local helper="/etc/grub.d/30_uefi-firmware"
     local grub_cfg="/boot/grub2/grub.cfg"
 
-    [[ -f "$helper" ]] || return 0
+    # /etc/grub.d is root-only (0700) since F45's grub2-tools, so the file tests
+    # must run as root: a plain [[ -f ]] fails as the user and silently skipped
+    # this whole function after the F44 -> F45 upgrade.
+    sudo test -f "$helper" || return 0
     command -v grub2-mkconfig &> /dev/null || { log_warn "grub2-mkconfig not found, skipping"; return 0; }
 
-    [[ -x "$helper" ]] && sudo chmod -x "$helper"
+    if sudo test -x "$helper"; then
+        sudo chmod -x "$helper"
+    fi
 
     # Only rebuild when the entry is actually still in the menu: grub2-mkconfig
     # is slow (it probes every disk) and there is nothing to do otherwise.
@@ -1007,3 +1012,24 @@ case $DISTRO in
 esac
 echo
 log_info "System update completed!"
+#############################################################################
+# FEDORA RELEASE UPGRADE NOTES (used for F44 -> F45)
+#############################################################################
+# OBS blocks `dnf system-upgrade` while it is installed: RPM Fusion's group
+# data asks for a non-existent "obs-studio-freeworld" whenever obs-studio is
+# installed, and the solver fails with "problem with installed package /
+# conflicting requests" (with --allowerasing it removes OBS anyway).
+# Before upgrading, check with a dry run whether this is still the case:
+#   sudo dnf system-upgrade download --releasever=N --assumeno
+#
+# 1. Before the upgrade, remove OBS (settings in ~/.config/obs-studio are kept):
+#   sudo dnf remove obs-studio obs-studio-libs 'obs-studio-plugin-*'
+#
+# 2. Upgrade:
+#   update (run this script)
+#   sudo dnf system-upgrade download --releasever=45
+#   sudo dnf5 offline reboot
+#
+# 3. After the upgrade, reinstall OBS
+#   sudo dnf install -y obs-studio obs-studio-plugin-browser obs-studio-plugin-distroav obs-studio-plugin-pwvideo obs-studio-plugin-vlc-video obs-studio-plugin-webkitgtk obs-studio-plugin-x264 || log_warn "OBS reinstall failed, continuing with kmods..."
+#############################################################################

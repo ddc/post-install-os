@@ -19,7 +19,7 @@
       address {{ static_ipv4_address }}
       netmask {{ static_ipv4_netmask }}
       gateway {{ static_ipv4_gateway }}
-      #dns-nameservers {{ host_dns_servers | join(' ') }}
+      #dns-nameservers {{ dns_servers_plain | join(' ') }}
 
       # WiFi
       #allow-hotplug wlan0
@@ -27,7 +27,7 @@
       address {{ static_ipv4_address }}
       netmask {{ static_ipv4_netmask }}
       gateway {{ static_ipv4_gateway }}
-      #dns-nameservers {{ host_dns_servers | join(' ') }}
+      #dns-nameservers {{ dns_servers_plain | join(' ') }}
       wireless-power off
       wpa-conf /etc/wpa_supplicant/wpa_supplicant.conf
     dest: /etc/network/interfaces
@@ -42,7 +42,7 @@
   ansible.builtin.copy:
     content: |
       # ANSIBLE MANAGED - upstream DNS only (never the local Pi-hole, avoids a DNS loop)
-      {% for server in host_dns_servers %}
+      {% for server in dns_servers_plain %}
       nameserver {{ server }}
       {% endfor %}
     dest: /etc/resolv.conf

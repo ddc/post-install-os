@@ -1,0 +1,31 @@
+---
+services:
+  dnsproxy:
+    image: adguard/dnsproxy:latest
+    container_name: dnsproxy
+    hostname: dnsproxy
+    restart: always
+    init: true
+    env_file: .env
+    network_mode: host
+    command: >
+      --listen 127.0.0.1
+      --port ${DNSPROXY_PORT}
+      --upstream ${DNSPROXY_UPSTREAM_1}
+      --upstream ${DNSPROXY_UPSTREAM_2}
+      --bootstrap ${DNSPROXY_BOOTSTRAP_1}
+      --bootstrap ${DNSPROXY_BOOTSTRAP_2}
+      --dnssec
+    environment:
+      TZ: ${TZ}
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "nc", "-z", "127.0.0.1", "${DNSPROXY_PORT}"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s

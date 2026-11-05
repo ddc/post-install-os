@@ -51,9 +51,6 @@ function update_debian {
     sudo apt-get upgrade -y
     sudo apt-get dist-upgrade -y
     sudo apt-get full-upgrade -y
-    # autoremove can refuse when a new kernel was installed but we are still
-    # running the old one (apt blocks removing the running kernel — by design).
-    # Treat that as non-fatal: tell the user to reboot and re-run later.
     if ! sudo apt-get autoremove -y --purge; then
         log_warn "autoremove failed (likely a pending kernel upgrade — reboot required)."
         log_warn "After reboot, re-run this script to clean up obsolete kernel packages."
@@ -61,11 +58,6 @@ function update_debian {
     sudo apt-get clean
 }
 #############################################################################
-# An upgrade can restart docker/networking; wait for DNS before dietpi-update
-# (it downloads its patches from GitHub and fails hard on a lookup error).
-# A skewed clock makes DNSSEC RRSIG validity windows fail, so Pi-hole answers
-# BOGUS for zones with short-lived signatures and name resolution half-breaks.
-# Cheap to check here, and the cause is never obvious from the symptom.
 function check_clock_synced {
     local synced
     synced=$(timedatectl show --property=NTPSynchronized --value 2>/dev/null || echo "unknown")

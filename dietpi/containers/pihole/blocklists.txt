@@ -26,8 +26,8 @@
 ### Pi-Hole Default StevenBlack's Unified Hosts (Adware + Malware) Blocklist
 ### https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts
 ################################################
-#### HAGEZI BLOCK LISTS -> https://github.com/hagezi/dns-blocklists
-#### Copy the one you want to use (DONT ENABLE MORE THAN ONE)
+### HAGEZI BLOCK LISTS -> https://github.com/hagezi/dns-blocklists
+### Copy the one you want to use (DONT ENABLE MORE THAN ONE)
 # https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/adblock/light.txt
 # https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/adblock/multi.txt
 # https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/adblock/pro.txt
@@ -38,7 +38,7 @@
 ################################################
 ### ENABLED SECTION
 ################################################
-https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/adblock/pro.plus.txt
+https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/adblock/pro.txt
 https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/adblock/tif.txt
 https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/adblock/fake.txt
 https://raw.githubusercontent.com/curbengh/urlhaus-filter/gh-pages/urlhaus-filter-hosts.txt

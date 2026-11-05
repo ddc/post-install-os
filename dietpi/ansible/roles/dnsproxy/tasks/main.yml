@@ -1,0 +1,101 @@
+---
+
+- name: Set DoH upstreams in local dnsproxy .env
+  ansible.builtin.lineinfile:
+    path: "{{ playbook_dir }}/../containers/dnsproxy/.env"
+    regexp: "^DNSPROXY_UPSTREAM_{{ upstream_index + 1 }}="
+    line: "DNSPROXY_UPSTREAM_{{ upstream_index + 1 }}={{ item }}"
+    state: present
+  loop: "{{ dns_doh_upstreams }}"
+  loop_control:
+    index_var: upstream_index
+    label: "DNSPROXY_UPSTREAM_{{ upstream_index + 1 }}={{ item }}"
+  delegate_to: localhost
+
+- name: Set bootstrap resolvers in local dnsproxy .env
+  ansible.builtin.lineinfile:
+    path: "{{ playbook_dir }}/../containers/dnsproxy/.env"
+    regexp: "^DNSPROXY_BOOTSTRAP_{{ bootstrap_index + 1 }}="
+    line: "DNSPROXY_BOOTSTRAP_{{ bootstrap_index + 1 }}={{ item }}:53"
+    state: present
+  loop: "{{ dns_servers_plain[:2] }}"
+  loop_control:
+    index_var: bootstrap_index
+    label: "DNSPROXY_BOOTSTRAP_{{ bootstrap_index + 1 }}={{ item }}:53"
+  delegate_to: localhost
+
+- name: Set listen port in local dnsproxy .env
+  ansible.builtin.lineinfile:
+    path: "{{ playbook_dir }}/../containers/dnsproxy/.env"
+    regexp: '^DNSPROXY_PORT='
+    line: "DNSPROXY_PORT={{ dnsproxy_port }}"
+    state: present
+  delegate_to: localhost
+
+##### CONTAINER DEPLOY / UPDATE #####
+- name: Ensure dnsproxy container directory exists on host
+  ansible.builtin.file:
+    path: "{{ containers_remote_directory }}/dnsproxy"
+    state: directory
+    owner: "{{ new_users[0].name }}"
+    group: "{{ new_users[0].name }}"
+    mode: '0755'
+  become: yes
+
+- name: Copy dnsproxy container files
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../containers/dnsproxy/"
+    dest: "{{ containers_remote_directory }}/dnsproxy/"
+    owner: "{{ new_users[0].name }}"
+    group: "{{ new_users[0].name }}"
+    mode: '0644'
+    directory_mode: '0755'
+  become: yes
+
+- name: Make update_dnsproxy.sh executable
+  ansible.builtin.file:
+    path: "{{ containers_remote_directory }}/dnsproxy/update_dnsproxy.sh"
+    mode: '0755'
+  become: yes
+
+- name: Check if dnsproxy container is running
+  ansible.builtin.shell: docker ps --format '{{ "{{" }}.Names{{ "}}" }}' | grep -q '^dnsproxy$'
+  become_user: "{{ new_users[0].name }}"
+  register: dnsproxy_running
+  changed_when: false
+  failed_when: false
+
+- name: Start dnsproxy fresh (first-time install)
+  ansible.builtin.shell: docker compose up -d
+  args:
+    chdir: "{{ containers_remote_directory }}/dnsproxy"
+  become_user: "{{ new_users[0].name }}"
+  when: dnsproxy_running.rc != 0
+
+- name: Run update_dnsproxy.sh (pull + restart + verify + prune)
+  ansible.builtin.shell: ./update_dnsproxy.sh
+  args:
+    chdir: "{{ containers_remote_directory }}/dnsproxy"
+  become_user: "{{ new_users[0].name }}"
+  when: dnsproxy_running.rc == 0
+  register: dnsproxy_update_result
+
+- name: Display dnsproxy update output
+  ansible.builtin.debug:
+    var: dnsproxy_update_result.stdout_lines
+  when:
+    - dnsproxy_update_result is defined
+    - dnsproxy_update_result.stdout_lines is defined
+
+##### VERIFY #####
+- name: Verify dnsproxy resolves on loopback
+  ansible.builtin.command: dig +short +time=3 +tries=1 @127.0.0.1 -p {{ dnsproxy_port }} example.com
+  register: dnsproxy_resolve
+  until: dnsproxy_resolve.rc == 0 and dnsproxy_resolve.stdout | length > 0
+  retries: 10
+  delay: 3
+  changed_when: false
+
+- name: Show dnsproxy verification result
+  ansible.builtin.debug:
+    msg: "dnsproxy answering on 127.0.0.1#{{ dnsproxy_port }} -> {{ dnsproxy_resolve.stdout_lines | first }}"

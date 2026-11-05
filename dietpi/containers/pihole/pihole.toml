@@ -3,8 +3,8 @@
 # Documentation: https://docs.pi-hole.net/ftldns/configfile/
 
 [dns]
-# Upstream DNS servers (Quad9 with malware filtering, DNSSEC validation, and ECS)
-upstreams = ["9.9.9.11", "149.112.112.11", "2620:fe::11", "2620:fe::fe:11"]
+# Upstream: the local dnsproxy container (cloudflared in proxy-dns mode)
+upstreams = ["127.0.0.1#5053"]
 dnssec = true
 queryLogging = true
 

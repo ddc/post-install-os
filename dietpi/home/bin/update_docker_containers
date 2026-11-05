@@ -47,12 +47,16 @@ echo
 case $DISTRO in
     raspberrypi|debian|ubuntu|mint)
         log_action "Updating Docker Containers..."
-        # Update Pi-hole LAST: restarting it takes LAN DNS offline, so keep
-        # that window short and after every other image pull has finished.
+        # Update the DNS stack LAST, dnsproxy then pihole: restarting either
+        # takes LAN DNS down, and pihole forwards to dnsproxy.
         update_dirs=()
         for dir in /opt/containers/*/; do
-            [ "$(basename "$dir")" = "pihole" ] || update_dirs+=("$dir")
+            case "$(basename "$dir")" in
+                dnsproxy|pihole) ;;
+                *) update_dirs+=("$dir") ;;
+            esac
         done
+        [ -d /opt/containers/dnsproxy/ ] && update_dirs+=(/opt/containers/dnsproxy/)
         [ -d /opt/containers/pihole/ ] && update_dirs+=(/opt/containers/pihole/)
         for dir in "${update_dirs[@]}"; do
             name=$(basename "$dir")

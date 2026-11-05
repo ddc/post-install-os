@@ -22,13 +22,15 @@
     - role: openssh
       tags: [openssh, security]
     - role: firewall
-      tags: [firewall, security, pihole, finances, postgres, mariadb, mongodb, netdata, portainer, kafka, discordbot]
+      tags: [firewall, security, pihole, finances, postgres, mariadb, mongodb, netdata, portainer, kafka, discordbot, homeassistant]
 
     # Docker runtime (required by every container tag; idempotent)
     - role: docker
-      tags: [docker, pihole, finances, postgres, mariadb, mongodb, netdata, portainer, kafka, discordbot]
+      tags: [docker, dnsproxy, pihole, finances, postgres, mariadb, mongodb, netdata, portainer, kafka, discordbot, homeassistant]
 
     # Container-specific roles
+    - role: dnsproxy
+      tags: [dnsproxy, pihole]
     - role: pihole
       tags: pihole
     - role: postgres
@@ -47,6 +49,8 @@
       tags: portainer
     - role: kafka
       tags: kafka
+    - role: homeassistant
+      tags: homeassistant
 
   tasks:
     - name: Disable dietpi user

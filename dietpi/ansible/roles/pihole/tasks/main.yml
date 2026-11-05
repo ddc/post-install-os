@@ -35,6 +35,13 @@
     state: present
   delegate_to: localhost
 
+- name: Point local pihole.toml at the dnsproxy upstream
+  ansible.builtin.lineinfile:
+    path: "{{ playbook_dir }}/../containers/pihole/pihole.toml"
+    regexp: '^upstreams\s*='
+    line: 'upstreams = ["127.0.0.1#{{ dnsproxy_port }}"]'
+  delegate_to: localhost
+
 - name: Set PIHOLE_GID in .env to the ansible user's GID
   ansible.builtin.lineinfile:
     path: "{{ playbook_dir }}/../containers/pihole/.env"
@@ -225,8 +232,38 @@
     job: "cd {{ containers_remote_directory }}/pihole && ./update_pihole.sh >> /var/log/pihole-update.log 2>&1"
     state: present
 
-##### FIREWALL RULES #####
+##### LIVE CONFIG #####
+- name: Read live Pi-hole upstreams
+  ansible.builtin.shell: docker exec pihole pihole-FTL --config dns.upstreams
+  become_user: "{{ new_users[0].name }}"
+  register: pihole_live_upstreams
+  changed_when: false
+  failed_when: false
 
+- name: Point the running Pi-hole at the dnsproxy upstream
+  ansible.builtin.shell: >
+    docker exec pihole pihole-FTL --config dns.upstreams '[ "127.0.0.1#{{ dnsproxy_port }}" ]'
+  become_user: "{{ new_users[0].name }}"
+  when:
+    - pihole_live_upstreams.rc == 0
+    - "'127.0.0.1#' + (dnsproxy_port | string) not in pihole_live_upstreams.stdout"
+
+- name: Read live Pi-hole DNSSEC setting
+  ansible.builtin.shell: docker exec pihole pihole-FTL --config dns.dnssec
+  become_user: "{{ new_users[0].name }}"
+  register: pihole_live_dnssec
+  changed_when: false
+  failed_when: false
+
+- name: Set DNSSEC validation on the running Pi-hole
+  ansible.builtin.shell: >
+    docker exec pihole pihole-FTL --config dns.dnssec {{ pihole_dnssec | lower }}
+  become_user: "{{ new_users[0].name }}"
+  when:
+    - pihole_live_dnssec.rc == 0
+    - pihole_live_dnssec.stdout | trim != (pihole_dnssec | lower | string)
+
+##### FIREWALL RULES #####
 - name: Check if UFW is available (pihole)
   ansible.builtin.command: which ufw
   register: pihole_ufw_check

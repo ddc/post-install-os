@@ -132,7 +132,8 @@ function system_enable_rpmfusion {
     log_action "ENABLING RPM Fusion repositories"
     _install_rpmfusion_release free || return 1
     _install_rpmfusion_release nonfree || return 1
-    # The nvidia-driver repo is defined by rpmfusion-nonfree-release, so enable it after that is installed
+    # The nvidia-driver repo file ships (disabled) in fedora-workstation-repositories
+    # (/usr/share/dnf5/repos.d/); this only flips it on via the config-manager override
     sudo dnf config-manager setopt rpmfusion-nonfree-nvidia-driver.enabled=1
     return 0
 }
@@ -144,7 +145,10 @@ function system_enable_rpmfusion {
 # Exclude removed packages from every future dnf operation (install, upgrade, group upgrade, system-upgrade)
 # Calling this more than once is safe
 # To install an excluded package later: sudo dnf install --disableexcludes=all <pkg>
-# To exclude with dnf: sudo dnf config-manager setopt excludepkgs='libreoffice*'
+# To exclude by hand: add names to the excludepkgs= line in $DNF_EXCLUDES_FILE.
+# (`sudo dnf config-manager setopt excludepkgs='a,b'` also works, but it writes
+# /etc/dnf/dnf.conf and each call REPLACES the value it set before; dnf merges
+# both files.) Check the effective list: dnf --dump-main-config | grep ^excludepkgs
 DNF_EXCLUDES_FILE="/etc/dnf/libdnf5.conf.d/80-excludepkgs.conf"
 function _add_dnf_excludes {
     local -a new existing merged
@@ -487,8 +491,18 @@ EOF
 #############################################################################
 function install_openlinkhub {
     log_action "INSTALLING OpenLinkHub"
-    #sudo dnf copr enable -y jurkovic-nikola/OpenLinkHub fedora-44-x86_64
     sudo dnf copr enable -y jurkovic-nikola/OpenLinkHub
+    # Right after a Fedora release the copr chroot for it can exist but be empty
+    # (seen on F45). Fall back to the previous release's build, which runs fine;
+    # switch the repo file back to the current release once builds appear.
+    local fedora_ver prev_ver
+    fedora_ver=$(rpm -E %fedora)
+    if ! dnf -q --refresh repoquery --available \
+            --repo='copr:copr.fedorainfracloud.org:jurkovic-nikola:OpenLinkHub' OpenLinkHub 2>/dev/null | grep -q .; then
+        prev_ver=$((fedora_ver - 1))
+        log_warn "No OpenLinkHub build for Fedora ${fedora_ver} yet, using the fedora-${prev_ver} build"
+        sudo dnf copr enable -y jurkovic-nikola/OpenLinkHub "fedora-${prev_ver}-$(uname -m)"
+    fi
     sudo dnf install -y OpenLinkHub
     ## service configuration that will ensure OpenLinkHub starts after USB devices are fully initialized at boot
     sudo mkdir -p /etc/systemd/system/OpenLinkHub.service.d
@@ -573,12 +587,29 @@ EOF
 function install_msodbcsql18 {
     log_action "INSTALLING msodbcsql18"
     sudo dnf config-manager addrepo --overwrite --from-repofile=https://packages.microsoft.com/config/rhel/9/prod.repo
+    # This is Microsoft's RHEL 9 repo, not built for Fedora, and it has broken
+    # things here before:
+    #  - moby-* packages conflict with docker-ce
+    #  - aznfs 0.1.6 bundled libraries and *claimed to provide* libc, gnutls,
+    #    nettle etc., so the F44 -> F45 system-upgrade picked it to satisfy
+    #    libnettle.so.8 (the real provider is Fedora's nettle3.10) and installed
+    #    a useless Azure NFS mount helper
+    # So only let dnf see the two packages we use from it. Saved in
+    # /etc/dnf/repos.override.d/99-config_manager.repo, so it survives the
+    # `addrepo --overwrite` above.
+    #   See what is allowed:  grep -A2 packages-microsoft /etc/dnf/repos.override.d/99-config_manager.repo
+    #   Allow another package (e.g. aznfs, if Azure NFS mounts are ever needed) - list ALL names, setopt replaces:
+    #     sudo dnf config-manager setopt 'packages-microsoft-com-prod.includepkgs=msodbcsql18,mssql-tools18,aznfs'
+    #     sudo dnf install aznfs
+    #     (it asks about enabling auto-updates; config: /opt/microsoft/aznfs/data/config)
+    #   Remove the limit entirely:
+    #     sudo dnf config-manager setopt 'packages-microsoft-com-prod.includepkgs='
+    #   Remove aznfs again: sudo dnf remove aznfs
+    sudo dnf config-manager setopt 'packages-microsoft-com-prod.includepkgs=msodbcsql18,mssql-tools18'
     sudo ACCEPT_EULA=Y dnf install -y --assumeyes msodbcsql18
     sudo ACCEPT_EULA=Y dnf install -y --assumeyes mssql-tools18
     sudo dnf install -y unixODBC-devel
     sudo dnf install -y unixODBC
-    log_action "Excluding moby packages from Microsoft repository to prevent Docker CE conflicts"
-    sudo sed -i '/repo_gpgcheck=1/a exclude=moby-cli moby-engine moby-buildx moby-compose' /etc/yum.repos.d/mssql-release.repo 2>/dev/null || true
     return 0
 }
 #############################################################################

@@ -1,6 +1,6 @@
 ---
 # Only truly global values live here. Role-specific variables live in each
-# role's own vars/main.yml (e.g. roles/openssh/vars/main.yml, roles/network/...).
+# role's own vars/main.yml (e.g. roles/openssh/vars/main.yml, roles/network/...)
 
 # Inventory / connection
 dietpi_host: "rpi"
@@ -22,6 +22,25 @@ containers_remote_directory: "/opt/containers"
 
 # List of containers to clean (e.g., ['pihole'] or [] for none)
 containers_clean_on_deploy: []
+
+##### DNS #####
+# DNS upstreams (Quad9 with malware filtering)
+# Query path for LAN clients:
+#   client -> pihole (:53) -> dnsproxy (127.0.0.1:5053) -> DoH over TLS -> Quad9
+dns_servers_plain:
+  - "9.9.9.11"
+  - "149.112.112.11"
+  - "1.1.1.1"
+
+# DoH endpoints used by the dnsproxy container
+# dns11 = malware filtering + ECS (9.9.9.11)
+# dns = malware filtering without ECS, as secondary
+dns_doh_upstreams:
+  - "https://dns11.quad9.net/dns-query"
+  - "https://dns.quad9.net/dns-query"
+
+# Loopback port the dnsproxy container listens on, Pi-hole forwards here
+dnsproxy_port: 5053
 
 # SSH port stays global
 ssh_port: 22
