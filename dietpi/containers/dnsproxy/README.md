@@ -44,6 +44,11 @@ Defaults are Quad9: `dns11` (malware filtering + ECS, the encrypted equivalent
 of `9.9.9.11`) with `dns` (malware filtering, no ECS) as secondary. Keep these
 in sync with `dns_doh_upstreams` in `ansible/group_vars/all.yml`.
 
+The defaults are **IP literals**, not hostnames: Quad9's certificate carries IP
+SANs for these addresses, so there is no bootstrap lookup and no plaintext DNS
+leaves the box at all. Hostname forms work too, but then `--bootstrap` resolves
+them in cleartext on every reconnect.
+
 Other providers, if you ever want to switch:
 
 | Provider              | Endpoint                                   |

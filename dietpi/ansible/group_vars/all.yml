@@ -33,11 +33,9 @@ dns_servers_plain:
   - "1.1.1.1"
 
 # DoH endpoints used by the dnsproxy container
-# dns11 = malware filtering + ECS (9.9.9.11)
-# dns = malware filtering without ECS, as secondary
 dns_doh_upstreams:
-  - "https://dns11.quad9.net/dns-query"
-  - "https://dns.quad9.net/dns-query"
+  - "https://9.9.9.11/dns-query"
+  - "https://149.112.112.11/dns-query"
 
 # Loopback port the dnsproxy container listens on, Pi-hole forwards here
 dnsproxy_port: 5053
