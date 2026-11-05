@@ -256,8 +256,10 @@ function update_fedora {
 
     if command -v flatpak &> /dev/null; then
         log_action "Checking flatpak packages updates..."
-        output=$(flatpak update -y 2>&1)
-        if echo "$output" | grep -q "Updated"; then
+        if ! output=$(flatpak update -y 2>&1); then
+            echo "$output"
+            log_warn "flatpak update failed, continuing with other tasks..."
+        elif echo "$output" | grep -q "Updated"; then
             echo "$output"
         else
             log_success "Flatpak packages already up to date"
@@ -509,7 +511,9 @@ function rebuild_uv_tools_for_python_change {
 
     local system_python
     local system_python_minor
+    local system_python_home
     system_python=$(command -v python3)
+    system_python_home=$(dirname "$system_python")
     system_python_minor=$("$system_python" --version 2>&1 | grep -oE '[0-9]+\.[0-9]+' | head -1)
     [ -z "$system_python_minor" ] && return 0
 
@@ -518,13 +522,20 @@ function rebuild_uv_tools_for_python_change {
 
     local rebuilt=()
     local failed=()
-    local tool_dir tool_name venv_minor pyvenv_cfg
+    local tool_dir tool_name venv_minor venv_home pyvenv_cfg
 
     for tool_dir in "$uv_tools_dir"/*/; do
         [ -d "$tool_dir" ] || continue
         tool_name=$(basename "$tool_dir")
         pyvenv_cfg="$tool_dir/pyvenv.cfg"
         [ -f "$pyvenv_cfg" ] || continue
+
+        # Only venvs built on the system interpreter break when the distro
+        # bumps Python (e.g. Fedora 44 -> 45: 3.14 -> 3.15). Tools deliberately
+        # pinned to a uv-managed Python (e.g. ansible-core, which does not run
+        # on 3.15 yet) are left alone.
+        venv_home=$(sed -nE 's/^home[[:space:]]*=[[:space:]]*//p' "$pyvenv_cfg" | head -1)
+        [ "$venv_home" = "$system_python_home" ] || continue
 
         venv_minor=$(grep -oE '^(version_info|python_version)[[:space:]]*=[[:space:]]*[0-9]+\.[0-9]+' "$pyvenv_cfg" | grep -oE '[0-9]+\.[0-9]+' | head -1)
         [ -z "$venv_minor" ] && continue
@@ -980,10 +991,10 @@ case $DISTRO in
         check_and_enroll_mok_if_needed_fedora
         update_and_ensure_npm_packages
         update_docker_buildx
-        update_precommit
         update_bun
         update_rust
         update_uv
+        update_precommit
         update_terraform
         update_firmware
         #update_ollama

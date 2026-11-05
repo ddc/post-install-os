@@ -161,7 +161,7 @@ Containers are selected via `--tags` at playbook runtime. No variable to maintai
 ansible-playbook -i inventory.yml playbook.yml --tags postgres
 
 # Deploy multiple containers in one run
-ansible-playbook -i inventory.yml playbook.yml --tags pihole,postgres,mariadb
+ansible-playbook -i inventory.yml playbook.yml --tags postgres,pihole,finances,discordbot
 
 # Deploy everything (full playbook, no tags)
 ansible-playbook -i inventory.yml playbook.yml

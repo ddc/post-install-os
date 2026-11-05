@@ -19,9 +19,9 @@ new_users:
 
 # Docker containers (shared by all container roles)
 containers_remote_directory: "/opt/containers"
-containers_clean_on_deploy: []  # List of containers to clean (e.g., ['pihole'] or [] for none)
 
-# SSH port stays global: both the openssh and firewall roles use it, and the
-# firewall role can run (via container tags) without openssh. The remaining SSH
-# options live in roles/openssh/vars/main.yml.
+# List of containers to clean (e.g., ['pihole'] or [] for none)
+containers_clean_on_deploy: []
+
+# SSH port stays global
 ssh_port: 22

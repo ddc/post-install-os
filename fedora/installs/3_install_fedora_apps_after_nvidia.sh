@@ -105,25 +105,66 @@ function system_limit_kernel_numbers {
     return 0
 }
 #############################################################################
+function _install_rpmfusion_release {
+    local kind="$1"   # free | nonfree
+    local label="${kind^^}"
+    local url="https://download1.rpmfusion.org/${kind}/fedora/rpmfusion-${kind}-release-$(rpm -E %fedora).noarch.rpm"
+
+    rpm -q "rpmfusion-${kind}-release" &>/dev/null && return 0
+
+    log_info "Installing RPM Fusion ${label} repository..."
+    if sudo dnf install -y "$url"; then
+        log_success "RPM Fusion ${label} installed"
+        return 0
+    fi
+
+    log_warn "dnf could not install rpmfusion-${kind}-release, retrying with rpm --nodeps..."
+    if sudo rpm -Uvh --nodeps "$url"; then
+        log_success "RPM Fusion ${label} installed (rpm --nodeps)"
+        return 0
+    fi
+
+    log_error "Failed to install RPM Fusion ${label} repository"
+    return 1
+}
+
 function system_enable_rpmfusion {
     log_action "ENABLING RPM Fusion repositories"
+    _install_rpmfusion_release free || return 1
+    _install_rpmfusion_release nonfree || return 1
+    # The nvidia-driver repo is defined by rpmfusion-nonfree-release, so enable it after that is installed
     sudo dnf config-manager setopt rpmfusion-nonfree-nvidia-driver.enabled=1
-    if ! rpm -q rpmfusion-free-release &>/dev/null; then
-        log_info "Installing RPM Fusion FREE repository..."
-        sudo dnf install -y "https://download1.rpmfusion.org/free/fedora/rpmfusion-free-release-$(rpm -E %fedora).noarch.rpm"
-        log_success "RPM Fusion FREE installed"
-    fi
-    if ! rpm -q rpmfusion-nonfree-release &>/dev/null; then
-        log_info "Installing RPM Fusion NONFREE repository..."
-        sudo dnf install -y "https://download1.rpmfusion.org/nonfree/fedora/rpmfusion-nonfree-release-$(rpm -E %fedora).noarch.rpm"
-        log_success "RPM Fusion NONFREE installed"
-    fi
     return 0
 }
 #############################################################################
 #############################################################################
 # REMOVING
 #############################################################################
+#############################################################################
+# Exclude removed packages from every future dnf operation (install, upgrade, group upgrade, system-upgrade)
+# Calling this more than once is safe
+# To install an excluded package later: sudo dnf install --disableexcludes=all <pkg>
+# To exclude with dnf: sudo dnf config-manager setopt excludepkgs='libreoffice*'
+DNF_EXCLUDES_FILE="/etc/dnf/libdnf5.conf.d/80-excludepkgs.conf"
+function _add_dnf_excludes {
+    local -a new existing merged
+    # Lists span several lines; flatten so read -a gets every name
+    read -r -a new <<< "$(printf '%s' "${*//,/ }" | tr '\n' ' ')"
+    [ ${#new[@]} -eq 0 ] && return 0
+
+    if sudo test -f "$DNF_EXCLUDES_FILE"; then
+        read -r -a existing <<< "$(sudo sed -nE 's/^excludepkgs[[:space:]]*=[[:space:]]*//p' "$DNF_EXCLUDES_FILE" | tr ',' ' ')"
+    fi
+
+    mapfile -t merged < <(printf '%s\n' "${existing[@]}" "${new[@]}" | sed '/^$/d' | sort -u)
+    local joined
+    joined=$(IFS=,; echo "${merged[*]}")
+
+    sudo mkdir -p "$(dirname "$DNF_EXCLUDES_FILE")"
+    printf '# Managed by post-install script: packages removed on purpose\n[main]\nexcludepkgs=%s\n' "$joined" \
+        | sudo tee "$DNF_EXCLUDES_FILE" > /dev/null
+    log_info "dnf excludes updated in $DNF_EXCLUDES_FILE"
+}
 #############################################################################
 function remove_apps {
     log_action "REMOVING Apps"
@@ -135,6 +176,7 @@ function remove_apps {
         log_info "Removing app: $pkg"
         sudo dnf remove -y "$pkg" 2>/dev/null || true
     done
+    _add_dnf_excludes "$list_remove"
     return 0
 }
 #############################################################################
@@ -149,6 +191,7 @@ function remove_libreoffice {
         log_info "Removing: $pkg"
         sudo dnf remove -y "$pkg" 2>/dev/null || true
     done
+    _add_dnf_excludes 'libreoffice*'
     return 0
 }
 #############################################################################
@@ -444,7 +487,7 @@ EOF
 #############################################################################
 function install_openlinkhub {
     log_action "INSTALLING OpenLinkHub"
-    #sudo dnf copr enable -y jurkovic-nikola/OpenLinkHub fedora-43-x86_64
+    #sudo dnf copr enable -y jurkovic-nikola/OpenLinkHub fedora-44-x86_64
     sudo dnf copr enable -y jurkovic-nikola/OpenLinkHub
     sudo dnf install -y OpenLinkHub
     ## service configuration that will ensure OpenLinkHub starts after USB devices are fully initialized at boot
