@@ -74,12 +74,12 @@
   become: yes
   changed_when: true
 
-- name: Create logs directory
+- name: Create backend logs directory owned by container user nobody (UID 65534)
   ansible.builtin.file:
     path: "{{ finances_install_dir }}/backend/logs"
     state: directory
-    owner: "1000"
-    group: "1000"
+    owner: "65534"
+    group: "65534"
     mode: '0755'
   become: yes
 
