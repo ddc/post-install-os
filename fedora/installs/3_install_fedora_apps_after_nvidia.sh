@@ -492,9 +492,6 @@ EOF
 function install_openlinkhub {
     log_action "INSTALLING OpenLinkHub"
     sudo dnf copr enable -y jurkovic-nikola/OpenLinkHub
-    # Right after a Fedora release the copr chroot for it can exist but be empty
-    # (seen on F45). Fall back to the previous release's build, which runs fine;
-    # switch the repo file back to the current release once builds appear.
     local fedora_ver prev_ver
     fedora_ver=$(rpm -E %fedora)
     if ! dnf -q --refresh repoquery --available \
@@ -587,29 +584,16 @@ EOF
 function install_msodbcsql18 {
     log_action "INSTALLING msodbcsql18"
     sudo dnf config-manager addrepo --overwrite --from-repofile=https://packages.microsoft.com/config/rhel/9/prod.repo
-    # This is Microsoft's RHEL 9 repo, not built for Fedora, and it has broken
-    # things here before:
-    #  - moby-* packages conflict with docker-ce
-    #  - aznfs 0.1.6 bundled libraries and *claimed to provide* libc, gnutls,
-    #    nettle etc., so the F44 -> F45 system-upgrade picked it to satisfy
-    #    libnettle.so.8 (the real provider is Fedora's nettle3.10) and installed
-    #    a useless Azure NFS mount helper
-    # So only let dnf see the two packages we use from it. Saved in
-    # /etc/dnf/repos.override.d/99-config_manager.repo, so it survives the
-    # `addrepo --overwrite` above.
-    #   See what is allowed:  grep -A2 packages-microsoft /etc/dnf/repos.override.d/99-config_manager.repo
-    #   Allow another package (e.g. aznfs, if Azure NFS mounts are ever needed) - list ALL names, setopt replaces:
-    #     sudo dnf config-manager setopt 'packages-microsoft-com-prod.includepkgs=msodbcsql18,mssql-tools18,aznfs'
-    #     sudo dnf install aznfs
-    #     (it asks about enabling auto-updates; config: /opt/microsoft/aznfs/data/config)
-    #   Remove the limit entirely:
-    #     sudo dnf config-manager setopt 'packages-microsoft-com-prod.includepkgs='
-    #   Remove aznfs again: sudo dnf remove aznfs
     sudo dnf config-manager setopt 'packages-microsoft-com-prod.includepkgs=msodbcsql18,mssql-tools18'
     sudo ACCEPT_EULA=Y dnf install -y --assumeyes msodbcsql18
     sudo ACCEPT_EULA=Y dnf install -y --assumeyes mssql-tools18
     sudo dnf install -y unixODBC-devel
     sudo dnf install -y unixODBC
+    if command -v odbcinst-generate &> /dev/null; then
+        sudo mkdir -p /etc/odbc/odbcinst.d
+        sudo ln -sfn /opt/microsoft/msodbcsql18/etc/odbcinst.ini /etc/odbc/odbcinst.d/40-msodbcsql18.ini
+        sudo odbcinst-generate
+    fi
     return 0
 }
 #############################################################################

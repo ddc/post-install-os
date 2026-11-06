@@ -521,6 +521,8 @@ function rebuild_uv_tools_for_python_change {
     system_python_home=$(dirname "$system_python")
     system_python_minor=$("$system_python" --version 2>&1 | grep -oE '[0-9]+\.[0-9]+' | head -1)
     [ -z "$system_python_minor" ] && return 0
+    local system_python_full
+    system_python_full=$("$system_python" --version 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
 
     local uv_tools_dir="${UV_TOOL_DIR:-$HOME/.local/share/uv/tools}"
     [ -d "$uv_tools_dir" ] || return 0
@@ -536,22 +538,33 @@ function rebuild_uv_tools_for_python_change {
         [ -f "$pyvenv_cfg" ] || continue
 
         # Only venvs built on the system interpreter break when the distro
-        # bumps Python (e.g. Fedora 44 -> 45: 3.14 -> 3.15). Tools deliberately
-        # pinned to a uv-managed Python (e.g. ansible-core, which does not run
-        # on 3.15 yet) are left alone.
+        # bumps Python (e.g. Fedora 44 -> 45: 3.14 -> 3.15). Tools pinned to a
+        # uv-managed Python (uv tool install --managed-python --python 3.X) are
+        # left alone.
         venv_home=$(sed -nE 's/^home[[:space:]]*=[[:space:]]*//p' "$pyvenv_cfg" | head -1)
         [ "$venv_home" = "$system_python_home" ] || continue
 
-        venv_minor=$(grep -oE '^(version_info|python_version)[[:space:]]*=[[:space:]]*[0-9]+\.[0-9]+' "$pyvenv_cfg" | grep -oE '[0-9]+\.[0-9]+' | head -1)
-        [ -z "$venv_minor" ] && continue
+        # Decide on what the interpreter actually loads, NOT pyvenv.cfg:
+        # `uv tool install --reinstall` keeps the existing venv, so it installs
+        # into lib/python<new>/ but leaves version_info at the old version
+        # (which made every run "rebuild" every tool after F44 -> F45).
+        local site_dir="$tool_dir/lib/python${system_python_minor}/site-packages"
+        if compgen -G "$site_dir/*.dist-info" > /dev/null; then
+            continue
+        fi
 
-        if [ "$venv_minor" != "$system_python_minor" ]; then
-            log_info "Rebuilding $tool_name on Python $system_python_minor (was $venv_minor)..."
-            if uv tool install --reinstall --python "$system_python" "$tool_name" </dev/null &>/dev/null; then
-                rebuilt+=("$tool_name")
-            else
-                failed+=("$tool_name")
-            fi
+        venv_minor=$(find "$tool_dir/lib" -mindepth 1 -maxdepth 1 -name 'python3.*' -printf '%f\n' 2>/dev/null \
+            | sed 's/^python//' | sort -V | tail -1)
+        log_info "Rebuilding $tool_name on Python $system_python_minor (was ${venv_minor:-unknown})..."
+        if uv tool install --reinstall --python "$system_python" "$tool_name" </dev/null &>/dev/null \
+           && compgen -G "$site_dir/*.dist-info" > /dev/null; then
+            # Drop site-packages of old Python versions and keep pyvenv.cfg truthful
+            find "$tool_dir/lib" -mindepth 1 -maxdepth 1 -name 'python3.*' \
+                ! -name "python${system_python_minor}" -exec rm -rf {} +
+            sed -i -E "s/^version_info[[:space:]]*=.*/version_info = ${system_python_full}/" "$pyvenv_cfg"
+            rebuilt+=("$tool_name")
+        else
+            failed+=("$tool_name")
         fi
     done
 
