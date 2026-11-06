@@ -242,10 +242,11 @@ function install_python_libs {
 #############################################################################
 function install_libs {
     log_action "INSTALLING Libs"
+    # mariadb-connector-c-devel, NOT mysql-devel
     local list_libs="Cython, ntfs-3g, libffi-devel, sqlite, net-tools, hunspell-pt-BR,
     NetworkManager-openvpn, dnf-plugins-core, cmake, perl-Tk, cifs-utils, poppler-cpp-devel,
     libnotify, bzip2-devel, sqlite-devel, boost-devel, libpq-devel, mtools, dosfstools,
-    python3-bcrypt, mysql-devel, screen, unixODBC-devel, libcurl-devel, zlib-devel, xz-devel,
+    python3-bcrypt, mariadb-connector-c-devel, screen, unixODBC-devel, libcurl-devel, zlib-devel, xz-devel,
     ncurses-devel, readline-devel, openssl, openssl-devel, gdbm-devel, tk-devel, usbutils,
     extra-cmake-modules, v4l-utils, dkms, libaio, libaio-devel, libudev-devel, libva, libva-utils,
     kernel-devel, kernel-headers, pass, ca-certificates, qt6-qtbase-devel, libusbmuxd-utils,
