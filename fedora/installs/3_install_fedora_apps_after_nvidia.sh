@@ -952,6 +952,11 @@ function configure_grub_modifications {
     sudo chmod 644 /etc/grub.d/20_memtest86+ 2>/dev/null || true
     sudo chmod 644 /etc/grub.d/30_uefi-firmware 2>/dev/null || true
     #####
+    ## "$(readlink -f /sys/class/hwmon/hwmon1/device/driver)"; lsmod | grep -i nct; modinfo -F description nct6775; modinfo nct6798 2>&1 | head -1
+    log_info "GRUB - Load nct6775 (Super-I/O fans/sensors) on every boot"
+    echo "nct6775" | sudo tee /etc/modules-load.d/nct6775.conf > /dev/null
+    sudo modprobe nct6775 2>/dev/null || true
+    #####
 #    log_info "GRUB - Changing timeout and screen resolution"
 #    if grep -q "^GRUB_TIMEOUT=" /etc/default/grub; then
 #        sudo sed -i "s/^GRUB_TIMEOUT=.*/GRUB_TIMEOUT=5/" /etc/default/grub
