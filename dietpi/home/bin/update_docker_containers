@@ -25,6 +25,12 @@ log_action() { echo -e "${ACTION_MARK} ${BLUE}[ACTION]${NC} $*"; }
 #############################################################################
 [[ $EUID -eq 0 ]] && log_error "Script cannot be run by root" && exit 1
 #############################################################################
+function stack_is_running {
+    local dir="$1"
+    [ -f "${dir}docker-compose.yml" ] || return 1
+    [ -n "$(cd "$dir" && docker compose ps -q --status running 2>/dev/null)" ]
+}
+#############################################################################
 ARCH=$(uname -m)
 DISTRO=$( (source /etc/os-release && echo "$ID") 2>/dev/null || echo "unknown")
 DISTRO_VERSION=$( (source /etc/os-release && echo "$VERSION_ID") 2>/dev/null || echo "unknown")
@@ -47,23 +53,41 @@ echo
 case $DISTRO in
     raspberrypi|debian|ubuntu|mint)
         log_action "Updating Docker Containers..."
-        # Update the DNS stack LAST, dnsproxy then pihole: restarting either
-        # takes LAN DNS down, and pihole forwards to dnsproxy.
         update_dirs=()
         for dir in /opt/containers/*/; do
+            if ! stack_is_running "$dir"; then
+                log_info "Skipping $(basename "$dir") (not running)"
+                continue
+            fi
             case "$(basename "$dir")" in
                 dnsproxy|pihole) ;;
                 *) update_dirs+=("$dir") ;;
             esac
         done
-        [ -d /opt/containers/dnsproxy/ ] && update_dirs+=(/opt/containers/dnsproxy/)
-        [ -d /opt/containers/pihole/ ] && update_dirs+=(/opt/containers/pihole/)
-        for dir in "${update_dirs[@]}"; do
-            name=$(basename "$dir")
-            echo "=== Updating $name ==="
-            (cd "$dir" && docker compose pull -q && docker compose down -t 30 && docker compose up -d --remove-orphans) || echo "!!! Failed: $name"
+        for dir in /opt/containers/dnsproxy/ /opt/containers/pihole/; do
+            stack_is_running "$dir" && update_dirs+=("$dir")
         done
-        docker image prune -f
+        if [ ${#update_dirs[@]} -eq 0 ]; then
+            log_warn "No running containers to update"
+        else
+            for dir in "${update_dirs[@]}"; do
+                name=$(basename "$dir")
+                script="update_${name}.sh"
+                echo "=== Updating $name ==="
+                if [ -x "${dir}${script}" ]; then
+                    # Use the stack's own update script
+                    if grep -q -- '--yes' "${dir}${script}"; then
+                        (cd "$dir" && "./${script}" --yes) || echo "!!! Failed: $name"
+                    else
+                        (cd "$dir" && "./${script}") || echo "!!! Failed: $name"
+                    fi
+                else
+                    log_warn "$name has no update script, plain image swap"
+                    (cd "$dir" && docker compose pull -q && docker compose down -t 30 && docker compose up -d --remove-orphans) || echo "!!! Failed: $name"
+                fi
+            done
+            docker image prune -f
+        fi
         ;;
     *)
         log_error "Unsupported distribution: $DISTRO"

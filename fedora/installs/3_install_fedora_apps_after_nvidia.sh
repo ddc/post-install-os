@@ -913,12 +913,13 @@ EOF
 }
 #############################################################################
 function configure_fstab_mounts {
+    ## to auto-unmount: x-systemd.idle-timeout=300
     log_action "Add ssd mount points to fstab"
     sudo mkdir -p /media/router
     if ! grep -q "${ROUTER_CIFS}" /etc/fstab; then
         sudo /bin/su -c "cat <<EOF >> /etc/fstab
 ## customs
-//${ROUTER_CIFS} /media/router cifs user,noauto,sec=none,uid=1000,gid=1000,vers=2.0,file_mode=0755,dir_mode=0755 0 0
+//${ROUTER_CIFS} /media/router cifs noauto,x-systemd.automount,_netdev,sec=none,uid=1000,gid=1000,vers=2.0,file_mode=0755,dir_mode=0755 0 0
 EOF"
         log_success "Added router mount to fstab"
     else
@@ -941,7 +942,9 @@ EOF
 
     sudo chmod u+s /usr/bin/mount.cifs
     sudo systemctl daemon-reload
-    sudo mount -a 2>/dev/null || true
+    sudo systemctl stop media-router.mount
+    sudo systemctl restart media-router.automount
+    sudo systemctl restart remote-fs.target
     return 0
 }
 #############################################################################
