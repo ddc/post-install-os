@@ -215,8 +215,8 @@
       #-------Cooling Fan-----
       dtparam=cooling_fan=on
       dtparam=fan_temp0=40000 dtparam=fan_temp0_hyst=5000 dtparam=fan_temp0_speed=150
-      dtparam=fan_temp1=50000 dtparam=fan_temp1_hyst=5000 dtparam=fan_temp1_speed=180
-      dtparam=fan_temp2=60000 dtparam=fan_temp2_hyst=5000 dtparam=fan_temp2_speed=200
+      dtparam=fan_temp1=50000 dtparam=fan_temp1_hyst=5000 dtparam=fan_temp1_speed=200
+      dtparam=fan_temp2=60000 dtparam=fan_temp2_hyst=5000 dtparam=fan_temp2_speed=230
       dtparam=fan_temp3=70000 dtparam=fan_temp3_hyst=5000 dtparam=fan_temp3_speed=255
     marker: "# {mark} ANSIBLE MANAGED - Cooling Fan"
     create: no
