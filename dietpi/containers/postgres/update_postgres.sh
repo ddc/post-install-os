@@ -68,7 +68,7 @@ if [ "${CURRENT_VERSION}" != "${TARGET_VERSION}" ]; then
     echo -e "${YELLOW}The on-disk data format is incompatible between major versions.${NC}"
     echo -e "${YELLOW}This script will:${NC}"
     echo -e "${YELLOW}  1. Stop the old container${NC}"
-    echo -e "${YELLOW}  2. Remove the postgresql_data volume${NC}"
+    echo -e "${YELLOW}  2. Remove the postgres_data volume${NC}"
     echo -e "${YELLOW}  3. Start the new container (empty)${NC}"
     echo -e "${YELLOW}  4. Restore from the backup just created${NC}"
     echo ""
@@ -97,8 +97,8 @@ docker compose down
 
 # Wipe volume if major upgrade
 if [ "${MAJOR_UPGRADE}" = "1" ]; then
-    echo -e "${YELLOW}Removing postgresql_data volume...${NC}"
-    docker volume rm postgresql_data
+    echo -e "${YELLOW}Removing postgres_data volume...${NC}"
+    docker volume rm postgres_data
 fi
 
 # Start new container

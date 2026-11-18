@@ -22,7 +22,7 @@ services:
     ports:
       - ${POSTGRESQL_PORT}:5432
     volumes:
-      - postgresql_data:/var/lib/postgresql
+      - postgres_data:/var/lib/postgresql
     networks:
       - postgres_network
     command: >
@@ -45,5 +45,6 @@ networks:
     name: postgres_network
 
 volumes:
-  postgresql_data:
-    name: postgresql_data
+  postgres_data:
+    driver: local
+    name: postgres_data

@@ -39,4 +39,5 @@ networks:
 
 volumes:
   mongodb_data:
+    driver: local
     name: mongodb_data

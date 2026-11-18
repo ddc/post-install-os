@@ -35,4 +35,5 @@ networks:
 
 volumes:
   mariadb_data:
+    driver: local
     name: mariadb_data

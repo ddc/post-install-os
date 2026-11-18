@@ -35,6 +35,8 @@ services:
 
 volumes:
   pihole_data:
+    driver: local
     name: pihole_data
   dnsmasq_data:
+    driver: local
     name: dnsmasq_data

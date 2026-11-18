@@ -30,4 +30,5 @@ services:
 
 volumes:
   homeassistant_config:
+    driver: local
     name: homeassistant_config

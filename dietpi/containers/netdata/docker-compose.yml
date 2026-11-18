@@ -51,8 +51,11 @@ networks:
 
 volumes:
   netdata_config:
+    driver: local
     name: netdata_config
   netdata_lib:
+    driver: local
     name: netdata_lib
   netdata_cache:
+    driver: local
     name: netdata_cache

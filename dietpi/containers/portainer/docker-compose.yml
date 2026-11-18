@@ -28,4 +28,5 @@ networks:
 
 volumes:
   portainer_data:
+    driver: local
     name: portainer_data

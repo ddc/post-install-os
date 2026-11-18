@@ -63,4 +63,5 @@ networks:
 
 volumes:
   kafka_data:
+    driver: local
     name: kafka_data
