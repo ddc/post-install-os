@@ -342,7 +342,7 @@ function install_flatpak_apps {
 function install_uv_apps {
     log_action "INSTALLING UV apps for local user"
     local list_uv="nvibrant, aws-sso-util, awsume, cprofilev, black, ruff, poetry, pre-commit,
-    ansible-core, pgcli, mycli"
+    ansible-core, pgcli, mycli, azure-cli"
     log_info "Cleaning up old UV installation"
     if command -v uv &> /dev/null; then
         for pkg in ${list_uv//,/ }; do

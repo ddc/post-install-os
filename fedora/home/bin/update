@@ -25,6 +25,23 @@ log_action() { echo -e "${ACTION_MARK} ${BLUE}[ACTION]${NC} $*"; }
 #############################################################################
 [[ $EUID -eq 0 ]] && log_error "Script cannot be run by root" && exit 1
 #############################################################################
+REBOOT=false
+
+usage() {
+    echo "Usage: $(basename "$0") [-r|--reboot] [-h|--help]"
+    echo "  -r, --reboot   Reboot the system after a successful update"
+    echo "  -h, --help     Show this help and exit"
+}
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -r|--reboot) REBOOT=true ;;
+        -h|--help) usage; exit 0 ;;
+        *) log_error "Unknown argument: $1"; usage; exit 1 ;;
+    esac
+    shift
+done
+#############################################################################
 ARCH=$(uname -m)
 DISTRO=$( (source /etc/os-release && echo "$ID") 2>/dev/null || echo "unknown")
 DISTRO_VERSION=$( (source /etc/os-release && echo "$VERSION_ID") 2>/dev/null || echo "unknown")
@@ -1025,6 +1042,12 @@ case $DISTRO in
 esac
 echo
 log_info "System update completed!"
+
+if [[ "$REBOOT" == true ]]; then
+    log_action "Rebooting in 10 seconds (Ctrl+C to cancel)..."
+    sleep 10
+    sudo systemctl reboot
+fi
 #############################################################################
 # FEDORA RELEASE UPGRADE NOTES (used for F44 -> F45)
 #############################################################################
