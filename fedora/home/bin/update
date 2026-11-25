@@ -25,7 +25,9 @@ log_action() { echo -e "${ACTION_MARK} ${BLUE}[ACTION]${NC} $*"; }
 #############################################################################
 [[ $EUID -eq 0 ]] && log_error "Script cannot be run by root" && exit 1
 #############################################################################
-REBOOT=false
+AUTO_REBOOT=false
+REBOOT_DELAY_SECONDS=5
+#############################################################################
 
 usage() {
     echo "Usage: $(basename "$0") [-r|--reboot] [-h|--help]"
@@ -35,7 +37,7 @@ usage() {
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        -r|--reboot) REBOOT=true ;;
+        -r|--reboot) AUTO_REBOOT=true ;;
         -h|--help) usage; exit 0 ;;
         *) log_error "Unknown argument: $1"; usage; exit 1 ;;
     esac
@@ -1043,9 +1045,9 @@ esac
 echo
 log_info "System update completed!"
 
-if [[ "$REBOOT" == true ]]; then
-    log_action "Rebooting in 10 seconds (Ctrl+C to cancel)..."
-    sleep 10
+if [[ "$AUTO_REBOOT" == true ]]; then
+    log_action "Rebooting in ${REBOOT_DELAY_SECONDS} seconds (Ctrl+C to cancel)..."
+    sleep "$REBOOT_DELAY_SECONDS"
     sudo systemctl reboot
 fi
 #############################################################################
